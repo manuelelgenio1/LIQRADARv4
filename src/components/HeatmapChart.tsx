@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MarketState } from "../lib/market";
 import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
-import { computeIndicators, getIndicatorCfg } from "../lib/indicators";
+import { computeIndicators, getIndicatorCfg, type TrendDir } from "../lib/indicators";
 import { fmtAxisTime, fmtCompact, fmtHM, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
-type Osc = "cvd" | "macd" | "rsi";
+type Osc = "cvd" | "macd" | "rsi" | "adx";
 
 interface Props {
   state: MarketState;
@@ -13,11 +13,50 @@ interface Props {
   timeframes: { key: string; minutes: number }[];
 }
 
-const H = 496;
+const H = 488;
 const SCALE_W = 86;
-const SUB_H = 84;
+const SUB_H = 96;
 const TIME_H = 22;
 const PAD_T = 16;
+const MIN_VIS = 24;
+const ZOOM_KEY = "liqradar:zoom:v1";
+
+function loadZoom(tf: string): number {
+  try {
+    const m = JSON.parse(localStorage.getItem(ZOOM_KEY) ?? "{}") as Record<string, number>;
+    const v = m[tf];
+    if (Number.isFinite(v)) return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, Math.round(v)));
+  } catch {
+    /* sin almacenamiento */
+  }
+  return CANDLE_COUNT;
+}
+
+const TREND_META: Record<TrendDir, { label: string; c: string; bar: string }> = {
+  alcista: { label: "Alcista", c: "border-long-500/50 bg-long-900/40 text-long-300", bar: "#2de0c0" },
+  bajista: { label: "Bajista", c: "border-short-500/50 bg-short-900/50 text-short-300", bar: "#ff5d7e" },
+  lateral: { label: "Lateral", c: "border-flare-400/40 bg-flare-400/10 text-flare-300", bar: "#ffb224" },
+};
+
+function TrendIcon({ dir }: { dir: TrendDir }) {
+  if (dir === "alcista")
+    return (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+        <path d="M4 17 L10 11 L14 15 L20 7 M20 7 H15 M20 7 V12" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  if (dir === "bajista")
+    return (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+        <path d="M4 7 L10 13 L14 9 L20 17 M20 17 H15 M20 17 V12" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+      <path d="M4 12 H20 M16 8 L20 12 L16 16" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 function buildRamp(kind: "long" | "short"): string[] {
   const out: string[] = [];
@@ -39,46 +78,67 @@ const SHORT_RAMP = buildRamp("short");
 
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
-const TREND_META = {
-  alcista: { label: "Tendencia alcista", c: "border-long-500/50 bg-long-900/40 text-long-300", bar: "#2de0c0" },
-  bajista: { label: "Tendencia bajista", c: "border-short-500/50 bg-short-900/50 text-short-300", bar: "#ff5d7e" },
-  lateral: { label: "Rango lateral", c: "border-ink-600 bg-ink-800/70 text-mist-400", bar: "#8fa3c4" },
-} as const;
-
-function TrendIcon({ dir }: { dir: keyof typeof TREND_META }) {
-  if (dir === "alcista")
-    return (
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
-        <path d="M4 18 L14 8 M14 8 H7 M14 8 V15" strokeLinecap="round" strokeLinejoin="round" transform="rotate(-8 12 12)" />
-      </svg>
-    );
-  if (dir === "bajista")
-    return (
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
-        <path d="M4 6 L14 16 M14 16 H7 M14 16 V9" strokeLinecap="round" strokeLinejoin="round" transform="rotate(8 12 12)" />
-      </svg>
-    );
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
-      <path d="M4 12 H20 M16 8 L20 12 L16 16" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(900);
   const [hover, setHover] = useState<Hover | null>(null);
   const [osc, setOsc] = useState<Osc>("cvd");
+  const [visibleCount, setVisibleCount] = useState(() => loadZoom(tfKey));
 
   const cfg = getIndicatorCfg(tfKey);
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
 
-  const ind = useMemo(
-    () => computeIndicators(state.candles.map((k) => k.c), cfg, tfMin),
-    [state.candles, cfg, tfMin]
-  );
+  const ind = useMemo(() => computeIndicators(state.candles, cfg, tfMin), [state.candles, cfg, tfMin]);
+
+  // zoom por timeframe, persistido
+  useEffect(() => {
+    setVisibleCount(loadZoom(tfKey));
+  }, [tfKey]);
+  useEffect(() => {
+    try {
+      const m = JSON.parse(localStorage.getItem(ZOOM_KEY) ?? "{}") as Record<string, number>;
+      m[tfKey] = visibleCount;
+      localStorage.setItem(ZOOM_KEY, JSON.stringify(m));
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [tfKey, visibleCount]);
+
+  // rueda del ratón = zoom (listener no pasivo para poder prevenir el scroll)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const dirn = e.deltaY > 0 ? 1 : -1; // +1 alejar, −1 acercar
+      setVisibleCount((v) => {
+        const step = Math.max(2, Math.round(v * 0.14));
+        return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, v + dirn * step));
+      });
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const zoomBy = (dirn: 1 | -1) =>
+    setVisibleCount((v) => {
+      const step = Math.max(2, Math.round(v * 0.18));
+      return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, v + dirn * step));
+    });
+
+  // ventana visible + rango de precios auto-ajustado a las velas visibles
+  const view = useMemo(() => {
+    const start = CANDLE_COUNT - visibleCount;
+    let vLo = Infinity;
+    let vHi = -Infinity;
+    for (let i = start; i < CANDLE_COUNT; i++) {
+      vLo = Math.min(vLo, state.candles[i].l);
+      vHi = Math.max(vHi, state.candles[i].h);
+    }
+    const pad = (vHi - vLo) * 0.05 || Math.abs(vHi) * 0.001 || 1;
+    return { start, yMin: vLo - pad, yMax: vHi + pad };
+  }, [state.candles, visibleCount]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -100,23 +160,23 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, H);
 
-    const { candles, heat, heatMax, pMin, pMax, meta, cvd, clusters } = state;
+    const { candles, heat, pMin, pMax, meta, cvd, clusters } = state;
     const plotW = width - SCALE_W;
     const plotTop = PAD_T;
     const plotBottom = H - TIME_H - SUB_H - 12;
     const plotH = plotBottom - plotTop;
     const lastC = candles[CANDLE_COUNT - 1].c;
-    const y = (p: number) => plotTop + ((pMax - p) / (pMax - pMin)) * plotH;
-    const cellW = plotW / CANDLE_COUNT;
-    const cellH = plotH / HEAT_BINS;
+    const y = (p: number) => plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
+    const cellW = plotW / visibleCount;
+    const priceOfBin = (b: number) => pMin + (b / (HEAT_BINS - 1)) * (pMax - pMin);
 
-    // tinte de fondo según la tendencia dominante
+    // tinte de fondo según el consenso de tendencia
     const tint = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
-    if (ind.trend.dir === "alcista") {
+    if (ind.consensus.dir === "alcista") {
       tint.addColorStop(0, "rgba(45,224,192,0)");
-      tint.addColorStop(1, `rgba(45,224,192,${0.028 + ind.trend.strength * 0.03})`);
-    } else if (ind.trend.dir === "bajista") {
-      tint.addColorStop(0, `rgba(255,93,126,${0.028 + ind.trend.strength * 0.03})`);
+      tint.addColorStop(1, `rgba(45,224,192,${0.028 + ind.consensus.strength * 0.03})`);
+    } else if (ind.consensus.dir === "bajista") {
+      tint.addColorStop(0, `rgba(255,93,126,${0.028 + ind.consensus.strength * 0.03})`);
       tint.addColorStop(1, "rgba(255,93,126,0)");
     }
     ctx.fillStyle = tint;
@@ -126,7 +186,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     ctx.font = "10px 'IBM Plex Mono', monospace";
     ctx.textBaseline = "middle";
     for (let g = 0; g <= 6; g++) {
-      const p = pMin + ((pMax - pMin) * g) / 6;
+      const p = view.yMin + ((view.yMax - view.yMin) * g) / 6;
       const gy = y(p);
       ctx.strokeStyle = "rgba(37,54,80,0.4)";
       ctx.lineWidth = 1;
@@ -139,16 +199,23 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.fillText(fmtPrice(p, meta.decimals), plotW + 8, gy);
     }
 
-    // celdas de calor
-    for (let i = 0; i < CANDLE_COUNT; i++) {
+    // celdas de calor (mapeadas por precio al rango visible)
+    let heatVisMax = 0;
+    for (let i = view.start; i < CANDLE_COUNT; i++)
+      for (let b = 0; b < HEAT_BINS; b++) heatVisMax = Math.max(heatVisMax, heat[i * HEAT_BINS + b]);
+    if (heatVisMax <= 0) heatVisMax = state.heatMax || 1;
+    const cellH = plotH / HEAT_BINS;
+    for (let i = view.start; i < CANDLE_COUNT; i++) {
+      const x = (i - view.start) * cellW;
       for (let b = 0; b < HEAT_BINS; b++) {
-        const raw = heat[i * HEAT_BINS + b] / heatMax;
-        if (raw < 0.055) continue;
-        const t = Math.min(1, Math.pow(raw, 1.25));
-        const binPrice = pMin + ((b + 0.5) / HEAT_BINS) * (pMax - pMin);
-        const ramp = binPrice < lastC ? LONG_RAMP : SHORT_RAMP;
+        const v = heat[i * HEAT_BINS + b];
+        if (v / heatVisMax < 0.055) continue;
+        const bp = priceOfBin(b);
+        if (bp < view.yMin || bp > view.yMax) continue;
+        const t = Math.min(1, Math.pow(v / heatVisMax, 1.25));
+        const ramp = bp < lastC ? LONG_RAMP : SHORT_RAMP;
         ctx.fillStyle = ramp[Math.round(t * 25)];
-        ctx.fillRect(i * cellW, plotTop + (HEAT_BINS - 1 - b) * cellH, cellW + 0.5, cellH + 0.5);
+        ctx.fillRect(x, y(bp) - cellH / 2, cellW + 0.5, cellH + 0.5);
       }
     }
 
@@ -174,10 +241,10 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.fillText(label, 12, cy + 0.5);
     }
 
-    // velas
-    for (let i = 0; i < CANDLE_COUNT; i++) {
+    // velas (solo visibles)
+    for (let i = view.start; i < CANDLE_COUNT; i++) {
       const k = candles[i];
-      const cx = i * cellW + cellW / 2;
+      const cx = (i - view.start) * cellW + cellW / 2;
       const up = k.c >= k.o;
       const col = up ? "#2de0c0" : "#ff5d7e";
       ctx.strokeStyle = col;
@@ -192,31 +259,54 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1.2, Math.abs(yc - yo)));
     }
 
-    // ---- indicadores de tendencia (EMAs) ----
-    const drawEma = (arr: number[], color: string, w: number, dash?: number[]) => {
-      ctx.save();
+    // ---- Supertrend (línea ATR sobre el precio) ----
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, plotTop, plotW, plotH);
+    ctx.clip();
+    for (let i = Math.max(1, view.start); i < CANDLE_COUNT; i++) {
+      const x0 = (i - 1 - view.start) * cellW + cellW / 2;
+      const x1 = (i - view.start) * cellW + cellW / 2;
+      const col = ind.stUp[i] ? "#2de0c0" : "#ff5d7e";
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.7;
       ctx.beginPath();
-      ctx.rect(0, plotTop, plotW, plotH);
-      ctx.clip();
+      ctx.moveTo(x0, y(ind.st[i - 1]));
+      ctx.lineTo(x1, y(ind.st[i]));
+      ctx.stroke();
+      if (ind.stUp[i] !== ind.stUp[i - 1]) {
+        // marcador de giro de tendencia
+        ctx.beginPath();
+        ctx.arc(x1, y(ind.st[i]), 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = col;
+        ctx.fill();
+        ctx.strokeStyle = "#070c16";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    // ---- EMAs ----
+    const drawEma = (arr: number[], color: string, w: number, dash?: number[]) => {
       ctx.beginPath();
       ctx.setLineDash(dash ?? []);
-      for (let i = 0; i < arr.length; i++) {
-        const px = i * cellW + cellW / 2;
+      for (let i = view.start; i < CANDLE_COUNT; i++) {
+        const px = (i - view.start) * cellW + cellW / 2;
         const py = y(arr[i]);
-        if (i === 0) ctx.moveTo(px, py);
+        if (i === view.start) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
       ctx.strokeStyle = color;
       ctx.lineWidth = w;
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.restore();
     };
     drawEma(ind.emaTrend, "rgba(143,163,196,0.75)", 1.2, [4, 4]);
     drawEma(ind.emaSlow, "#ffb224", 1.5);
     drawEma(ind.emaFast, "#7df0da", 1.5);
+    ctx.restore();
 
-    // punto de cruce en la última lectura
+    // puntos de lectura en la última vela
     const dotAt = (v: number, color: string) => {
       const py = y(v);
       if (py < plotTop || py > plotBottom) return;
@@ -250,12 +340,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     // eje de tiempo (formato según temporalidad)
     ctx.fillStyle = "#48597a";
     ctx.textAlign = "center";
-    const step = tfMin >= 1440 ? 32 : 26;
-    for (let i = 8; i < CANDLE_COUNT; i += step) {
-      ctx.fillText(fmtAxisTime(candles[i].t, tfMin), i * cellW + cellW / 2, H - TIME_H / 2 - 4);
+    const step = Math.max(4, Math.round(visibleCount / 6));
+    for (let i = view.start + Math.floor(step / 2); i < CANDLE_COUNT; i += step) {
+      ctx.fillText(fmtAxisTime(candles[i].t, tfMin), (i - view.start) * cellW + cellW / 2, H - TIME_H / 2 - 4);
     }
 
-    // --- sub-panel de oscilador (CVD / MACD / RSI) ---
+    // --- sub-panel de oscilador (CVD / MACD / RSI / ADX) ---
     const subTop = plotBottom + 14;
     const subBottom = H - TIME_H - 4;
     ctx.strokeStyle = "rgba(37,54,80,0.55)";
@@ -266,10 +356,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
 
     const subMid = (subTop + subBottom) / 2;
     const subHalf = (subBottom - subTop) / 2 - 4;
+    const slice = (a: number[]) => a.slice(view.start);
 
     if (osc === "cvd") {
+      const cv = slice(cvd);
       let cMin = Infinity, cMax = -Infinity;
-      for (const v of cvd) { cMin = Math.min(cMin, v); cMax = Math.max(cMax, v); }
+      for (const v of cv) { cMin = Math.min(cMin, v); cMax = Math.max(cMax, v); }
       const cSpan = Math.max(1e-9, cMax - cMin);
       const cy2 = (v: number) => subTop + ((cMax - v) / cSpan) * (subBottom - subTop);
       const zeroY = cy2(0);
@@ -280,7 +372,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.lineTo(plotW, zeroY);
       ctx.stroke();
       ctx.setLineDash([]);
-      const cvdUp = cvd[cvd.length - 1] >= 0;
+      const cvdUp = cv[cv.length - 1] >= 0;
       const grad = ctx.createLinearGradient(0, subTop, 0, subBottom);
       if (cvdUp) {
         grad.addColorStop(0, "rgba(45,224,192,0.30)");
@@ -291,16 +383,16 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       }
       ctx.beginPath();
       ctx.moveTo(0, subBottom);
-      for (let i = 0; i < cvd.length; i++) ctx.lineTo(i * cellW + cellW / 2, cy2(cvd[i]));
+      for (let i = 0; i < cv.length; i++) ctx.lineTo(i * cellW + cellW / 2, cy2(cv[i]));
       ctx.lineTo(plotW, subBottom);
       ctx.closePath();
       ctx.fillStyle = grad;
       ctx.fill();
       ctx.beginPath();
-      for (let i = 0; i < cvd.length; i++) {
+      for (let i = 0; i < cv.length; i++) {
         const px = i * cellW + cellW / 2;
-        if (i === 0) ctx.moveTo(px, cy2(cvd[i]));
-        else ctx.lineTo(px, cy2(cvd[i]));
+        if (i === 0) ctx.moveTo(px, cy2(cv[i]));
+        else ctx.lineTo(px, cy2(cv[i]));
       }
       ctx.strokeStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
       ctx.lineWidth = 1.6;
@@ -309,22 +401,21 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.textAlign = "left";
       ctx.fillText("CVD · delta acumulado", 8, subTop + 1);
       ctx.fillStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
-      ctx.fillText(fmtCompact(cvd[cvd.length - 1]), 146, subTop + 1);
+      ctx.fillText(fmtCompact(cv[cv.length - 1]), 146, subTop + 1);
     } else if (osc === "macd") {
+      const hs = slice(ind.hist), ms = slice(ind.macd), ss = slice(ind.signal);
       let mMax = 1e-9;
-      for (let i = 0; i < ind.hist.length; i++) {
-        mMax = Math.max(mMax, Math.abs(ind.hist[i]), Math.abs(ind.macd[i]), Math.abs(ind.signal[i]));
+      for (let i = 0; i < hs.length; i++) {
+        mMax = Math.max(mMax, Math.abs(hs[i]), Math.abs(ms[i]), Math.abs(ss[i]));
       }
       const my = (v: number) => subMid - (v / mMax) * subHalf;
-      // histograma
-      for (let i = 0; i < ind.hist.length; i++) {
-        const v = ind.hist[i];
+      for (let i = 0; i < hs.length; i++) {
+        const v = hs[i];
         const px = i * cellW + cellW / 2;
         ctx.fillStyle = v >= 0 ? "rgba(45,224,192,0.45)" : "rgba(255,93,126,0.45)";
         const y0 = my(0), y1 = my(v);
         ctx.fillRect(px - Math.max(1, cellW * 0.28), Math.min(y0, y1), Math.max(1.4, cellW * 0.56), Math.abs(y1 - y0) || 1);
       }
-      // líneas macd y señal
       const line = (arr: number[], color: string) => {
         ctx.beginPath();
         for (let i = 0; i < arr.length; i++) {
@@ -336,8 +427,8 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
         ctx.lineWidth = 1.4;
         ctx.stroke();
       };
-      line(ind.macd, "#2de0c0");
-      line(ind.signal, "#ffb224");
+      line(ms, "#2de0c0");
+      line(ss, "#ffb224");
       ctx.strokeStyle = "rgba(95,115,150,0.35)";
       ctx.setLineDash([3, 4]);
       ctx.beginPath();
@@ -348,12 +439,49 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.fillStyle = "#8fa3c4";
       ctx.textAlign = "left";
       ctx.fillText(`MACD (${cfg.macd[0]},${cfg.macd[1]},${cfg.macd[2]})`, 8, subTop + 1);
-      const hv = ind.hist[ind.hist.length - 1];
+      const hv = hs[hs.length - 1];
       ctx.fillStyle = hv >= 0 ? "#2de0c0" : "#ff5d7e";
       ctx.fillText(`hist ${fmtCompact(hv)}`, 138, subTop + 1);
+    } else if (osc === "adx") {
+      const aS = slice(ind.adx), pS = slice(ind.pdi), mS = slice(ind.mdi);
+      let mx = 40;
+      for (let i = 0; i < aS.length; i++) mx = Math.max(mx, aS[i], pS[i], mS[i]);
+      const ay = (v: number) => subTop + (1 - Math.min(1, v / mx)) * (subBottom - subTop);
+      // zona de tendencia fuerte (≥25)
+      ctx.fillStyle = "rgba(255,178,36,0.06)";
+      ctx.fillRect(0, ay(mx), plotW, ay(25) - ay(mx));
+      ctx.strokeStyle = "rgba(95,115,150,0.35)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, ay(25));
+      ctx.lineTo(plotW, ay(25));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const line = (arr: number[], color: string, w: number) => {
+        ctx.beginPath();
+        for (let i = 0; i < arr.length; i++) {
+          const px = i * cellW + cellW / 2;
+          if (i === 0) ctx.moveTo(px, ay(arr[i]));
+          else ctx.lineTo(px, ay(arr[i]));
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = w;
+        ctx.stroke();
+      };
+      line(pS, "#2de0c0", 1.2);
+      line(mS, "#ff5d7e", 1.2);
+      line(aS, "#dbe6f7", 1.8);
+      const av = aS[aS.length - 1];
+      ctx.fillStyle = "#8fa3c4";
+      ctx.textAlign = "left";
+      ctx.fillText(`ADX ${cfg.adx} · fuerza de tendencia`, 8, subTop + 1);
+      ctx.fillStyle = av >= 25 ? "#ffb224" : "#8fa3c4";
+      ctx.fillText(av.toFixed(1), 196, subTop + 1);
+      ctx.fillStyle = "#48597a";
+      ctx.fillText("fuerte ≥ 25", 236, subTop + 1);
     } else {
+      const rs = slice(ind.rsi);
       const ry = (v: number) => subTop + ((100 - v) / 100) * (subBottom - subTop);
-      // zonas sobreventa / sobrecompra
       ctx.fillStyle = "rgba(255,93,126,0.07)";
       ctx.fillRect(0, ry(100), plotW, ry(70) - ry(100));
       ctx.fillStyle = "rgba(45,224,192,0.07)";
@@ -368,15 +496,15 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       }
       ctx.setLineDash([]);
       ctx.beginPath();
-      for (let i = 0; i < ind.rsi.length; i++) {
+      for (let i = 0; i < rs.length; i++) {
         const px = i * cellW + cellW / 2;
-        if (i === 0) ctx.moveTo(px, ry(ind.rsi[i]));
-        else ctx.lineTo(px, ry(ind.rsi[i]));
+        if (i === 0) ctx.moveTo(px, ry(rs[i]));
+        else ctx.lineTo(px, ry(rs[i]));
       }
       ctx.strokeStyle = "#b7c7e2";
       ctx.lineWidth = 1.5;
       ctx.stroke();
-      const rv = ind.rsi[ind.rsi.length - 1];
+      const rv = rs[rs.length - 1];
       ctx.beginPath();
       ctx.arc(plotW - cellW / 2, ry(rv), 2.6, 0, Math.PI * 2);
       ctx.fillStyle = rv > 70 ? "#ff5d7e" : rv < 30 ? "#2de0c0" : "#b7c7e2";
@@ -410,7 +538,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, hover, ind, osc, tfMin, cfg]);
+  }, [state, width, hover, ind, osc, tfMin, cfg, view, visibleCount]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -418,18 +546,22 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     const yy = e.clientY - rect.top;
     const plotW = width - SCALE_W;
     const plotBottom = H - TIME_H - SUB_H - 12;
-    const idx = Math.min(CANDLE_COUNT - 1, Math.max(0, Math.floor((x / plotW) * CANDLE_COUNT)));
-    const price = state.pMax - ((yy - PAD_T) / (plotBottom - PAD_T)) * (state.pMax - state.pMin);
+    const vIdx = Math.min(visibleCount - 1, Math.max(0, Math.floor((x / plotW) * visibleCount)));
+    const idx = view.start + vIdx;
+    const price = view.yMax - ((yy - PAD_T) / (plotBottom - PAD_T)) * (view.yMax - view.yMin);
     const bin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((price - state.pMin) / (state.pMax - state.pMin)) * (HEAT_BINS - 1))));
     const heat = state.heat[idx * HEAT_BINS + bin] / state.heatMax;
     setHover({ x, y: yy, idx, price, heat });
   };
 
   const k = hover ? state.candles[hover.idx] : null;
-  const tm = TREND_META[ind.trend.dir];
+  const cons = ind.consensus;
+  const tm = TREND_META[cons.dir];
   const lastFast = ind.emaFast[ind.emaFast.length - 1];
   const lastSlow = ind.emaSlow[ind.emaSlow.length - 1];
   const lastTrend = ind.emaTrend[ind.emaTrend.length - 1];
+  const lastStUp = ind.stUp[ind.stUp.length - 1];
+  const zoomed = visibleCount < CANDLE_COUNT;
 
   return (
     <section className="panel panel-corner anim-reveal" style={{ animationDelay: "0.05s" }}>
@@ -439,25 +571,27 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
             Heatmap de liquidaciones
           </h2>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            {state.meta.symbol} · perp · energía de liquidación por nivel de precio
+            {state.meta.symbol} · perp ·{" "}
+            <span className="hidden sm:inline">rueda = zoom · doble clic = restablecer</span>
+            <span className="sm:hidden">energía por nivel</span>
           </p>
         </div>
 
-        {/* insignia de tendencia */}
-        <span className={`flex items-center gap-2 border px-2.5 py-1.5 ${tm.c}`}>
-          <TrendIcon dir={ind.trend.dir} />
+        {/* insignia de tendencia (consenso de 5 indicadores) */}
+        <span className={`flex items-center gap-2 border px-2.5 py-1.5 ${tm.c}`} title="Consenso: cruce EMA + MACD + RSI + Supertrend + ADX">
+          <TrendIcon dir={cons.dir} />
           <span className="font-mono text-[9.5px] font-bold uppercase tracking-widest">{tm.label}</span>
           <span className="h-1 w-12 overflow-hidden bg-ink-700/80">
             <span
               className="block h-full transition-all duration-700"
-              style={{ width: `${Math.round(ind.trend.strength * 100)}%`, background: tm.bar }}
+              style={{ width: `${Math.round(cons.strength * 100)}%`, background: tm.bar }}
             />
           </span>
-          <span className="tick-num font-mono text-[9.5px] font-bold">{Math.round(ind.trend.strength * 100)}%</span>
+          <span className="tick-num font-mono text-[9.5px] font-bold">{Math.round(cons.strength * 100)}%</span>
         </span>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* leyenda de EMAs */}
+          {/* leyenda */}
           <div className="hidden items-center gap-3 font-mono text-[9px] text-mist-500 2xl:flex">
             <span className="flex items-center gap-1.5">
               <span className="h-[2px] w-4 bg-long-300" /> EMA {cfg.fast}
@@ -471,11 +605,15 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
               <span className="h-0 w-4 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
               <b className="tick-num text-mist-300">{fmtPrice(lastTrend, state.meta.decimals)}</b>
             </span>
+            <span className="flex items-center gap-1.5">
+              <span className={`h-[2px] w-4 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
+              ST {cfg.atr}×{cfg.stMult}
+            </span>
           </div>
 
           {/* selector de oscilador */}
           <div className="flex border border-ink-700 bg-ink-900/70">
-            {(["cvd", "macd", "rsi"] as Osc[]).map((o) => (
+            {(["cvd", "macd", "rsi", "adx"] as Osc[]).map((o) => (
               <button
                 key={o}
                 onClick={() => setOsc(o)}
@@ -488,13 +626,40 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
             ))}
           </div>
 
+          {/* control de zoom */}
+          <div className="flex items-stretch border border-ink-700 bg-ink-900/70" title="Nivel de zoom sobre la ventana de velas">
+            <button
+              onClick={() => zoomBy(1)}
+              className="px-2 font-mono text-[12px] font-bold text-mist-400 transition-colors hover:bg-ink-750 hover:text-mist-100"
+              title="Alejar (rueda hacia abajo)"
+            >
+              −
+            </button>
+            <button
+              onClick={() => setVisibleCount(CANDLE_COUNT)}
+              className={`tick-num border-x border-ink-700 px-2 py-1 font-mono text-[10px] font-semibold transition-colors hover:bg-ink-750 ${
+                zoomed ? "text-flare-300" : "text-mist-400"
+              }`}
+              title="Restablecer zoom"
+            >
+              ×{(CANDLE_COUNT / visibleCount).toFixed(1)}
+            </button>
+            <button
+              onClick={() => zoomBy(-1)}
+              className="px-2 font-mono text-[12px] font-bold text-mist-400 transition-colors hover:bg-ink-750 hover:text-mist-100"
+              title="Acercar (rueda hacia arriba)"
+            >
+              +
+            </button>
+          </div>
+
           {/* timeframes */}
           <div className="flex border border-ink-700 bg-ink-900/70">
             {timeframes.map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTfKey(t.key)}
-                className={`px-2.5 py-1 font-mono text-[10px] font-semibold transition-colors ${
+                className={`px-2 py-1 font-mono text-[10px] font-semibold transition-colors ${
                   t.key === tfKey
                     ? "bg-long-500/20 text-long-300"
                     : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
@@ -531,13 +696,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
           style={{ width: "100%", height: H, display: "block", cursor: "crosshair" }}
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
+          onDoubleClick={() => setVisibleCount(CANDLE_COUNT)}
         />
         {hover && k && (
           <div
             className="pointer-events-none absolute z-20 border border-ink-600 bg-ink-900/95 px-3 py-2 font-mono text-[10px] shadow-xl"
             style={{
-              left: Math.min(hover.x + 16, width - 200),
-              top: Math.min(hover.y + 14, H - 150),
+              left: Math.min(hover.x + 16, width - 220),
+              top: Math.min(hover.y + 14, H - 170),
             }}
           >
             <div className="mb-1 text-[9px] uppercase tracking-widest text-mist-500">
@@ -556,7 +722,11 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
               <span className="tick-num text-right">
                 <span className="text-long-300">{fmtPrice(ind.emaFast[hover.idx], state.meta.decimals)}</span>
                 {" / "}
-                <span className="text-flare-300">{fmtPrice(ind.emaSlow[hover.idx], state.meta.decimals)}</span>
+                <span className="text-flare-400">{fmtPrice(ind.emaSlow[hover.idx], state.meta.decimals)}</span>
+              </span>
+              <span className="text-mist-600">Supertrend</span>
+              <span className={`tick-num text-right ${ind.stUp[hover.idx] ? "text-long-300" : "text-short-300"}`}>
+                {fmtPrice(ind.st[hover.idx], state.meta.decimals)} {ind.stUp[hover.idx] ? "▲" : "▼"}
               </span>
             </div>
           </div>

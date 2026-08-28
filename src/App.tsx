@@ -9,6 +9,7 @@ import ClusterList from "./components/ClusterList";
 import { FundingOIPanel, DataQualityPanel } from "./components/MetricsPanels";
 import MarketMakerPanel from "./components/MarketMakerPanel";
 import LiquidationFeed from "./components/LiquidationFeed";
+import TrendConsensusPanel from "./components/TrendConsensusPanel";
 
 // ---------- ErrorBoundary: nunca más una pantalla en blanco ----------
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
@@ -102,12 +103,13 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* fila 3: feed + market maker path */}
+        {/* fila 3: feed + consenso + market maker path */}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
           <div className="xl:col-span-7">
             <LiquidationFeed state={state} paused={engine.paused} />
           </div>
-          <div className="xl:col-span-5">
+          <div className="space-y-4 xl:col-span-5">
+            <TrendConsensusPanel state={state} tfKey={engine.tfKey} />
             <MarketMakerPanel state={state} />
           </div>
         </div>
