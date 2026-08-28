@@ -70,7 +70,7 @@ function Dashboard() {
         source={engine.source}
         livePrices={engine.livePrices}
       />
-      <TickerTape livePrices={engine.livePrices} />
+      <TickerTape livePrices={engine.livePrices} paused={engine.paused} />
 
       <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 lg:px-6 lg:py-5">
         {/* fila 1: heatmap + radar */}

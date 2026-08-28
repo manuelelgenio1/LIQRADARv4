@@ -309,7 +309,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.textAlign = "left";
       ctx.fillText("CVD · delta acumulado", 8, subTop + 1);
       ctx.fillStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
-      ctx.fillText(fmtCompact(cvd[cvd.length - 1]), 128, subTop + 1);
+      ctx.fillText(fmtCompact(cvd[cvd.length - 1]), 146, subTop + 1);
     } else if (osc === "macd") {
       let mMax = 1e-9;
       for (let i = 0; i < ind.hist.length; i++) {

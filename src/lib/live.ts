@@ -69,7 +69,7 @@ export async function fetchDepth(symbol: string): Promise<BookData> {
   if (!r.ok) throw new Error(`depth ${r.status}`);
   const j = (await r.json()) as { bids: [string, string][]; asks: [string, string][] };
 
-  const mk = (rows: [string, string][], dirUp: boolean): BookLevel[] => {
+  const mk = (rows: [string, string][]): BookLevel[] => {
     let total = 0;
     return rows.slice(0, 15).map(([p, q]) => {
       const size = Number(q);
@@ -77,8 +77,8 @@ export async function fetchDepth(symbol: string): Promise<BookData> {
       return { price: Number(p), size, total, exchange: "Binance", isWall: false };
     });
   };
-  const bids = mk(j.bids, false);
-  const asks = mk(j.asks, true);
+  const bids = mk(j.bids);
+  const asks = mk(j.asks);
 
   const med = (arr: number[]) => {
     const s = [...arr].sort((a, b) => a - b);

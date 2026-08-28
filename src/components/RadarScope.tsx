@@ -27,7 +27,7 @@ export default function RadarScope({ state }: Props) {
       cl,
       x: C + Math.cos(angle) * r,
       y: C + Math.sin(angle) * r,
-      size: 3 + Math.sqrt(cl.sizeUsd / 1e6) * 1.5,
+      size: Math.min(8.5, 3 + Math.sqrt(cl.sizeUsd / 1e6) * 1.5),
       delay: (i * 0.6) % 4.8,
     };
   });

@@ -46,8 +46,9 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
   }, []);
 
   const lp = livePrices[meta.symbol];
-  const price = lp ? lp.price : state.candles[state.candles.length - 1].c;
-  const change = lp ? lp.change24h : state.change24h;
+  // con el feed en pausa la barra se congela en el último dato procesado
+  const price = lp && !paused ? lp.price : state.candles[state.candles.length - 1].c;
+  const change = lp && !paused ? lp.change24h : state.change24h;
   const up = change >= 0;
   const chip = SOURCE_CHIP[source];
 

@@ -46,7 +46,7 @@ export function FundingOIPanel({ state }: { state: MarketState }) {
         <div className="mt-2 h-1.5 overflow-hidden bg-ink-800">
           <div
             className={`h-full transition-all duration-700 ${state.oiDelta1h >= 0 ? "bg-long-400" : "bg-short-400"}`}
-            style={{ width: `${Math.min(100, 50 + state.oiDelta1h * 14)}%`, opacity: 0.85 }}
+            style={{ width: `${Math.max(4, Math.min(100, 50 + state.oiDelta1h * 14))}%`, opacity: 0.85 }}
           />
         </div>
 

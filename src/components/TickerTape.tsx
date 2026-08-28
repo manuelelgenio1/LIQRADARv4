@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SYMBOLS } from "../lib/market";
 import type { TickerInfo } from "../lib/live";
 import { fmtPct, fmtPrice } from "../lib/format";
@@ -11,7 +11,7 @@ interface TapeItem {
   vol: number;
 }
 
-export default function TickerTape({ livePrices }: { livePrices: Record<string, TickerInfo> }) {
+export default function TickerTape({ livePrices, paused }: { livePrices: Record<string, TickerInfo>; paused: boolean }) {
   const [items, setItems] = useState<TapeItem[]>(() =>
     SYMBOLS.map((s) => ({
       base: s.base,
@@ -22,12 +22,20 @@ export default function TickerTape({ livePrices }: { livePrices: Record<string, 
     }))
   );
 
+  // refs para no recrear el intervalo en cada tick del websocket
+  const liveRef = useRef(livePrices);
+  liveRef.current = livePrices;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+
   // respaldo simulado mientras el websocket no entrega datos
   useEffect(() => {
     const id = window.setInterval(() => {
+      if (pausedRef.current) return;
+      const lp = liveRef.current;
       setItems((prev) =>
         prev.map((it, i) => {
-          const live = livePrices[SYMBOLS[i].symbol];
+          const live = lp[SYMBOLS[i].symbol];
           if (live) return { ...it, price: live.price, change: live.change24h };
           const drift = (Math.random() - 0.5) * it.vol * 2.2;
           return {
@@ -39,7 +47,7 @@ export default function TickerTape({ livePrices }: { livePrices: Record<string, 
       );
     }, 1600);
     return () => window.clearInterval(id);
-  }, [livePrices]);
+  }, []);
 
   const row = (keyPrefix: string) =>
     items.map((it) => {
