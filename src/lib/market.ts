@@ -232,6 +232,26 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
       exchange: EXCHANGES[Math.floor(rand() * 3)],
     });
   }
+  // garantía: el radar nunca queda vacío — sintetiza piscinas si faltan
+  let guard = 0;
+  while (clusters.length < 6 && guard < 40) {
+    guard++;
+    const dir = guard % 2 === 0 ? 1 : -1;
+    const bin = Math.min(HEAT_BINS - 2, Math.max(1, curBin + dir * (4 + Math.floor(rand() * 34))));
+    if (usedBins.some((u) => Math.abs(u - bin) < 4)) continue;
+    usedBins.push(bin);
+    const side: "long" | "short" = bin < curBin ? "long" : "short";
+    const strength = 0.34 + rand() * 0.5;
+    clusters.push({
+      id: `${meta.symbol}-syn-${bin}`,
+      price: priceOf(bin),
+      side,
+      sizeUsd: meta.liqScale * 1e6 * strength * (0.45 + rand() * 0.75),
+      leverage: LEVERAGES[Math.floor(rand() * LEVERAGES.length)],
+      strength,
+      exchange: EXCHANGES[Math.floor(rand() * 3)],
+    });
+  }
   clusters.sort((a, b) => b.sizeUsd - a.sizeUsd);
 
   // libro de órdenes agregado
@@ -269,6 +289,20 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
   const first = candles[0].o;
   const change24h = ((curPrice - first) / first) * 100;
 
+  // eventos recientes para que el feed no arranque vacío
+  const events: LiquidationEvent[] = [];
+  for (let i = 0; i < 9; i++) {
+    events.push({
+      id: `${meta.symbol}-seed-${i}`,
+      time: now - (i + 1) * (3800 + rand() * 8200),
+      symbol: meta.symbol,
+      side: rand() < 0.5 ? "long" : "short",
+      price: curPrice * (1 + (rand() - 0.5) * 0.0022),
+      qtyUsd: Math.pow(rand(), 2.2) * meta.liqScale * 1e6 * 0.26 + 1400,
+      exchange: EXCHANGES[Math.floor(rand() * 3)],
+    });
+  }
+
   return {
     meta,
     tfMinutes,
@@ -291,7 +325,7 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
     latency,
     msgsPerSec: 42 + rand() * 90,
     uptimePct: 99.55 + rand() * 0.43,
-    events: [],
+    events,
     totalLiq24hLong: meta.liqScale * 1e6 * (3.2 + rand() * 5),
     totalLiq24hShort: meta.liqScale * 1e6 * (3.0 + rand() * 5),
     change24h,
@@ -335,18 +369,25 @@ export function tickMarket(s: MarketState): MarketState {
     heat.copyWithin(0, HEAT_BINS);
     for (let b = 0; b < HEAT_BINS; b++) heat[(CANDLE_COUNT - 1) * HEAT_BINS + b] = 0;
   }
-  const curBin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((last.c - s.pMin) / (s.pMax - s.pMin)) * (HEAT_BINS - 1))));
+  // el rango de precios se expande si el mercado se acerca al borde
+  let pMin = s.pMin;
+  let pMax = s.pMax;
+  const span0 = pMax - pMin;
+  if (last.c < pMin + span0 * 0.05) pMin = last.c - span0 * 0.05;
+  if (last.c > pMax - span0 * 0.05) pMax = last.c + span0 * 0.05;
+
+  const curBin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((last.c - pMin) / (pMax - pMin)) * (HEAT_BINS - 1))));
   const ci = CANDLE_COUNT - 1;
   for (let db = -3; db <= 3; db++) {
     const bb = curBin + db;
     if (bb < 0 || bb >= HEAT_BINS) continue;
     heat[ci * HEAT_BINS + bb] += (0.16 + rand() * 0.2) * Math.exp(-(db * db) / 3.2);
   }
-  let heatMax = s.heatMax;
-  for (let db = -3; db <= 3; db++) {
-    const bb = curBin + db;
-    if (bb >= 0 && bb < HEAT_BINS) heatMax = Math.max(heatMax, heat[ci * HEAT_BINS + bb]);
-  }
+  // decaimiento global para que el mapa no se "apague" ni sature con el tiempo
+  for (let i = 0; i < heat.length; i++) heat[i] *= 0.9988;
+  let heatMax = 0;
+  for (let i = 0; i < heat.length; i++) if (heat[i] > heatMax) heatMax = heat[i];
+  if (heatMax <= 0) heatMax = s.heatMax || 1;
 
   // CVD
   const cvd = s.cvd.slice();
@@ -399,6 +440,8 @@ export function tickMarket(s: MarketState): MarketState {
     candles,
     heat,
     heatMax,
+    pMin,
+    pMax,
     cvd,
     bids,
     asks,
