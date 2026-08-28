@@ -37,6 +37,17 @@ export function fmtHM(ts: number): string {
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
+const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+// Etiqueta del eje temporal según la temporalidad:
+// intradía → HH:MM · diario → "12 May" · semanal → "May '25"
+export function fmtAxisTime(ts: number, tfMinutes: number): string {
+  const d = new Date(ts);
+  if (tfMinutes < 60) return fmtHM(ts);
+  if (tfMinutes < 10080) return `${d.getUTCDate()} ${MESES[d.getUTCMonth()]}`;
+  return `${MESES[d.getUTCMonth()]} '${String(d.getUTCFullYear()).slice(2)}`;
+}
+
 export function fmtCountdown(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);

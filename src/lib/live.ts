@@ -32,8 +32,12 @@ export interface FundingOi {
   oi: number;
 }
 
+const INTERVAL_MAP: Record<string, string> = {
+  "1m": "1m", "5m": "5m", "15m": "15m", "1H": "1h", "4H": "4h", "1D": "1d", "1W": "1w",
+};
+
 export function toBinanceInterval(tfKey: string): string {
-  return tfKey.replace("m", "m").replace("H", "h");
+  return INTERVAL_MAP[tfKey] ?? "5m";
 }
 
 // ---------- velas reales ----------

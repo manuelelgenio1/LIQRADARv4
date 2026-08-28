@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MarketState } from "../lib/market";
 import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
-import { fmtCompact, fmtHM, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
+import { computeIndicators, getIndicatorCfg } from "../lib/indicators";
+import { fmtAxisTime, fmtCompact, fmtHM, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
+
+type Osc = "cvd" | "macd" | "rsi";
 
 interface Props {
   state: MarketState;
@@ -10,9 +13,9 @@ interface Props {
   timeframes: { key: string; minutes: number }[];
 }
 
-const H = 488;
+const H = 496;
 const SCALE_W = 86;
-const CVD_H = 82;
+const SUB_H = 84;
 const TIME_H = 22;
 const PAD_T = 16;
 
@@ -36,11 +39,46 @@ const SHORT_RAMP = buildRamp("short");
 
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
+const TREND_META = {
+  alcista: { label: "Tendencia alcista", c: "border-long-500/50 bg-long-900/40 text-long-300", bar: "#2de0c0" },
+  bajista: { label: "Tendencia bajista", c: "border-short-500/50 bg-short-900/50 text-short-300", bar: "#ff5d7e" },
+  lateral: { label: "Rango lateral", c: "border-ink-600 bg-ink-800/70 text-mist-400", bar: "#8fa3c4" },
+} as const;
+
+function TrendIcon({ dir }: { dir: keyof typeof TREND_META }) {
+  if (dir === "alcista")
+    return (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+        <path d="M4 18 L14 8 M14 8 H7 M14 8 V15" strokeLinecap="round" strokeLinejoin="round" transform="rotate(-8 12 12)" />
+      </svg>
+    );
+  if (dir === "bajista")
+    return (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+        <path d="M4 6 L14 16 M14 16 H7 M14 16 V9" strokeLinecap="round" strokeLinejoin="round" transform="rotate(8 12 12)" />
+      </svg>
+    );
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+      <path d="M4 12 H20 M16 8 L20 12 L16 16" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(900);
   const [hover, setHover] = useState<Hover | null>(null);
+  const [osc, setOsc] = useState<Osc>("cvd");
+
+  const cfg = getIndicatorCfg(tfKey);
+  const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
+
+  const ind = useMemo(
+    () => computeIndicators(state.candles.map((k) => k.c), cfg, tfMin),
+    [state.candles, cfg, tfMin]
+  );
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -65,12 +103,24 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     const { candles, heat, heatMax, pMin, pMax, meta, cvd, clusters } = state;
     const plotW = width - SCALE_W;
     const plotTop = PAD_T;
-    const plotBottom = H - TIME_H - CVD_H - 10;
+    const plotBottom = H - TIME_H - SUB_H - 12;
     const plotH = plotBottom - plotTop;
     const lastC = candles[CANDLE_COUNT - 1].c;
     const y = (p: number) => plotTop + ((pMax - p) / (pMax - pMin)) * plotH;
     const cellW = plotW / CANDLE_COUNT;
     const cellH = plotH / HEAT_BINS;
+
+    // tinte de fondo según la tendencia dominante
+    const tint = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
+    if (ind.trend.dir === "alcista") {
+      tint.addColorStop(0, "rgba(45,224,192,0)");
+      tint.addColorStop(1, `rgba(45,224,192,${0.028 + ind.trend.strength * 0.03})`);
+    } else if (ind.trend.dir === "bajista") {
+      tint.addColorStop(0, `rgba(255,93,126,${0.028 + ind.trend.strength * 0.03})`);
+      tint.addColorStop(1, "rgba(255,93,126,0)");
+    }
+    ctx.fillStyle = tint;
+    ctx.fillRect(0, plotTop, plotW, plotH);
 
     // rejilla horizontal + escala de precios
     ctx.font = "10px 'IBM Plex Mono', monospace";
@@ -142,6 +192,45 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.fillRect(cx - bw / 2, Math.min(yo, yc), bw, Math.max(1.2, Math.abs(yc - yo)));
     }
 
+    // ---- indicadores de tendencia (EMAs) ----
+    const drawEma = (arr: number[], color: string, w: number, dash?: number[]) => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, plotTop, plotW, plotH);
+      ctx.clip();
+      ctx.beginPath();
+      ctx.setLineDash(dash ?? []);
+      for (let i = 0; i < arr.length; i++) {
+        const px = i * cellW + cellW / 2;
+        const py = y(arr[i]);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = w;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    };
+    drawEma(ind.emaTrend, "rgba(143,163,196,0.75)", 1.2, [4, 4]);
+    drawEma(ind.emaSlow, "#ffb224", 1.5);
+    drawEma(ind.emaFast, "#7df0da", 1.5);
+
+    // punto de cruce en la última lectura
+    const dotAt = (v: number, color: string) => {
+      const py = y(v);
+      if (py < plotTop || py > plotBottom) return;
+      ctx.beginPath();
+      ctx.arc(plotW - cellW / 2, py, 2.6, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = "#070c16";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    };
+    dotAt(ind.emaFast[ind.emaFast.length - 1], "#7df0da");
+    dotAt(ind.emaSlow[ind.emaSlow.length - 1], "#ffb224");
+
     // línea de precio actual
     const ly = y(lastC);
     ctx.strokeStyle = "rgba(219,230,247,0.75)";
@@ -158,63 +247,148 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     ctx.fillText(fmtPrice(lastC, meta.decimals), plotW + 8, ly + 0.5);
     ctx.font = "10px 'IBM Plex Mono', monospace";
 
-    // eje de tiempo
+    // eje de tiempo (formato según temporalidad)
     ctx.fillStyle = "#48597a";
     ctx.textAlign = "center";
-    for (let i = 8; i < CANDLE_COUNT; i += 26) {
-      ctx.fillText(fmtHM(candles[i].t), i * cellW + cellW / 2, H - TIME_H / 2 - 4);
+    const step = tfMin >= 1440 ? 32 : 26;
+    for (let i = 8; i < CANDLE_COUNT; i += step) {
+      ctx.fillText(fmtAxisTime(candles[i].t, tfMin), i * cellW + cellW / 2, H - TIME_H / 2 - 4);
     }
 
-    // --- sub-panel CVD ---
-    const cvdTop = plotBottom + 12;
-    const cvdBottom = H - TIME_H - 6;
+    // --- sub-panel de oscilador (CVD / MACD / RSI) ---
+    const subTop = plotBottom + 14;
+    const subBottom = H - TIME_H - 4;
     ctx.strokeStyle = "rgba(37,54,80,0.55)";
     ctx.beginPath();
-    ctx.moveTo(0, cvdTop - 6);
-    ctx.lineTo(width, cvdTop - 6);
+    ctx.moveTo(0, subTop - 7);
+    ctx.lineTo(width, subTop - 7);
     ctx.stroke();
-    let cMin = Infinity, cMax = -Infinity;
-    for (const v of cvd) { cMin = Math.min(cMin, v); cMax = Math.max(cMax, v); }
-    const cSpan = Math.max(1e-9, cMax - cMin);
-    const cy2 = (v: number) => cvdTop + ((cMax - v) / cSpan) * (cvdBottom - cvdTop);
-    const zeroY = cy2(0);
-    ctx.strokeStyle = "rgba(95,115,150,0.35)";
-    ctx.setLineDash([3, 4]);
-    ctx.beginPath();
-    ctx.moveTo(0, zeroY);
-    ctx.lineTo(plotW, zeroY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    const cvdUp = cvd[cvd.length - 1] >= 0;
-    const grad = ctx.createLinearGradient(0, cvdTop, 0, cvdBottom);
-    if (cvdUp) {
-      grad.addColorStop(0, "rgba(45,224,192,0.30)");
-      grad.addColorStop(1, "rgba(45,224,192,0.02)");
+
+    const subMid = (subTop + subBottom) / 2;
+    const subHalf = (subBottom - subTop) / 2 - 4;
+
+    if (osc === "cvd") {
+      let cMin = Infinity, cMax = -Infinity;
+      for (const v of cvd) { cMin = Math.min(cMin, v); cMax = Math.max(cMax, v); }
+      const cSpan = Math.max(1e-9, cMax - cMin);
+      const cy2 = (v: number) => subTop + ((cMax - v) / cSpan) * (subBottom - subTop);
+      const zeroY = cy2(0);
+      ctx.strokeStyle = "rgba(95,115,150,0.35)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, zeroY);
+      ctx.lineTo(plotW, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const cvdUp = cvd[cvd.length - 1] >= 0;
+      const grad = ctx.createLinearGradient(0, subTop, 0, subBottom);
+      if (cvdUp) {
+        grad.addColorStop(0, "rgba(45,224,192,0.30)");
+        grad.addColorStop(1, "rgba(45,224,192,0.02)");
+      } else {
+        grad.addColorStop(0, "rgba(255,93,126,0.30)");
+        grad.addColorStop(1, "rgba(255,93,126,0.02)");
+      }
+      ctx.beginPath();
+      ctx.moveTo(0, subBottom);
+      for (let i = 0; i < cvd.length; i++) ctx.lineTo(i * cellW + cellW / 2, cy2(cvd[i]));
+      ctx.lineTo(plotW, subBottom);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < cvd.length; i++) {
+        const px = i * cellW + cellW / 2;
+        if (i === 0) ctx.moveTo(px, cy2(cvd[i]));
+        else ctx.lineTo(px, cy2(cvd[i]));
+      }
+      ctx.strokeStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.fillStyle = "#8fa3c4";
+      ctx.textAlign = "left";
+      ctx.fillText("CVD · delta acumulado", 8, subTop + 1);
+      ctx.fillStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
+      ctx.fillText(fmtCompact(cvd[cvd.length - 1]), 128, subTop + 1);
+    } else if (osc === "macd") {
+      let mMax = 1e-9;
+      for (let i = 0; i < ind.hist.length; i++) {
+        mMax = Math.max(mMax, Math.abs(ind.hist[i]), Math.abs(ind.macd[i]), Math.abs(ind.signal[i]));
+      }
+      const my = (v: number) => subMid - (v / mMax) * subHalf;
+      // histograma
+      for (let i = 0; i < ind.hist.length; i++) {
+        const v = ind.hist[i];
+        const px = i * cellW + cellW / 2;
+        ctx.fillStyle = v >= 0 ? "rgba(45,224,192,0.45)" : "rgba(255,93,126,0.45)";
+        const y0 = my(0), y1 = my(v);
+        ctx.fillRect(px - Math.max(1, cellW * 0.28), Math.min(y0, y1), Math.max(1.4, cellW * 0.56), Math.abs(y1 - y0) || 1);
+      }
+      // líneas macd y señal
+      const line = (arr: number[], color: string) => {
+        ctx.beginPath();
+        for (let i = 0; i < arr.length; i++) {
+          const px = i * cellW + cellW / 2;
+          if (i === 0) ctx.moveTo(px, my(arr[i]));
+          else ctx.lineTo(px, my(arr[i]));
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      };
+      line(ind.macd, "#2de0c0");
+      line(ind.signal, "#ffb224");
+      ctx.strokeStyle = "rgba(95,115,150,0.35)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, subMid);
+      ctx.lineTo(plotW, subMid);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#8fa3c4";
+      ctx.textAlign = "left";
+      ctx.fillText(`MACD (${cfg.macd[0]},${cfg.macd[1]},${cfg.macd[2]})`, 8, subTop + 1);
+      const hv = ind.hist[ind.hist.length - 1];
+      ctx.fillStyle = hv >= 0 ? "#2de0c0" : "#ff5d7e";
+      ctx.fillText(`hist ${fmtCompact(hv)}`, 138, subTop + 1);
     } else {
-      grad.addColorStop(0, "rgba(255,93,126,0.30)");
-      grad.addColorStop(1, "rgba(255,93,126,0.02)");
+      const ry = (v: number) => subTop + ((100 - v) / 100) * (subBottom - subTop);
+      // zonas sobreventa / sobrecompra
+      ctx.fillStyle = "rgba(255,93,126,0.07)";
+      ctx.fillRect(0, ry(100), plotW, ry(70) - ry(100));
+      ctx.fillStyle = "rgba(45,224,192,0.07)";
+      ctx.fillRect(0, ry(30), plotW, ry(0) - ry(30));
+      ctx.strokeStyle = "rgba(95,115,150,0.35)";
+      ctx.setLineDash([3, 4]);
+      for (const g of [30, 50, 70]) {
+        ctx.beginPath();
+        ctx.moveTo(0, ry(g));
+        ctx.lineTo(plotW, ry(g));
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      for (let i = 0; i < ind.rsi.length; i++) {
+        const px = i * cellW + cellW / 2;
+        if (i === 0) ctx.moveTo(px, ry(ind.rsi[i]));
+        else ctx.lineTo(px, ry(ind.rsi[i]));
+      }
+      ctx.strokeStyle = "#b7c7e2";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      const rv = ind.rsi[ind.rsi.length - 1];
+      ctx.beginPath();
+      ctx.arc(plotW - cellW / 2, ry(rv), 2.6, 0, Math.PI * 2);
+      ctx.fillStyle = rv > 70 ? "#ff5d7e" : rv < 30 ? "#2de0c0" : "#b7c7e2";
+      ctx.fill();
+      ctx.fillStyle = "#8fa3c4";
+      ctx.textAlign = "left";
+      ctx.fillText(`RSI ${cfg.rsi}`, 8, subTop + 1);
+      ctx.fillStyle = rv > 70 ? "#ff5d7e" : rv < 30 ? "#2de0c0" : "#b7c7e2";
+      ctx.fillText(rv.toFixed(1), 60, subTop + 1);
+      ctx.fillStyle = "#48597a";
+      ctx.fillText("sobrecompra >70 · sobreventa <30", 104, subTop + 1);
     }
-    ctx.beginPath();
-    ctx.moveTo(0, cvdBottom);
-    for (let i = 0; i < cvd.length; i++) ctx.lineTo(i * cellW + cellW / 2, cy2(cvd[i]));
-    ctx.lineTo(plotW, cvdBottom);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
-    ctx.beginPath();
-    for (let i = 0; i < cvd.length; i++) {
-      const px = i * cellW + cellW / 2;
-      if (i === 0) ctx.moveTo(px, cy2(cvd[i]));
-      else ctx.lineTo(px, cy2(cvd[i]));
-    }
-    ctx.strokeStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
-    ctx.fillStyle = "#8fa3c4";
-    ctx.textAlign = "left";
-    ctx.fillText("CVD", 8, cvdTop + 2);
-    ctx.fillStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
-    ctx.fillText(fmtCompact(cvd[cvd.length - 1]), 36, cvdTop + 2);
 
     // crosshair
     if (hover && hover.x < plotW) {
@@ -222,7 +396,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
       ctx.moveTo(hover.x, plotTop);
-      ctx.lineTo(hover.x, cvdBottom);
+      ctx.lineTo(hover.x, subBottom);
       ctx.moveTo(0, hover.y);
       ctx.lineTo(plotW, hover.y);
       ctx.stroke();
@@ -236,14 +410,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, hover]);
+  }, [state, width, hover, ind, osc, tfMin, cfg]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const yy = e.clientY - rect.top;
     const plotW = width - SCALE_W;
-    const plotBottom = H - TIME_H - CVD_H - 10;
+    const plotBottom = H - TIME_H - SUB_H - 12;
     const idx = Math.min(CANDLE_COUNT - 1, Math.max(0, Math.floor((x / plotW) * CANDLE_COUNT)));
     const price = state.pMax - ((yy - PAD_T) / (plotBottom - PAD_T)) * (state.pMax - state.pMin);
     const bin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((price - state.pMin) / (state.pMax - state.pMin)) * (HEAT_BINS - 1))));
@@ -252,6 +426,10 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
   };
 
   const k = hover ? state.candles[hover.idx] : null;
+  const tm = TREND_META[ind.trend.dir];
+  const lastFast = ind.emaFast[ind.emaFast.length - 1];
+  const lastSlow = ind.emaSlow[ind.emaSlow.length - 1];
+  const lastTrend = ind.emaTrend[ind.emaTrend.length - 1];
 
   return (
     <section className="panel panel-corner anim-reveal" style={{ animationDelay: "0.05s" }}>
@@ -265,19 +443,52 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
           </p>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-3">
-          <div className="hidden items-center gap-3 font-mono text-[9px] uppercase tracking-wider text-mist-500 lg:flex">
+        {/* insignia de tendencia */}
+        <span className={`flex items-center gap-2 border px-2.5 py-1.5 ${tm.c}`}>
+          <TrendIcon dir={ind.trend.dir} />
+          <span className="font-mono text-[9.5px] font-bold uppercase tracking-widest">{tm.label}</span>
+          <span className="h-1 w-12 overflow-hidden bg-ink-700/80">
+            <span
+              className="block h-full transition-all duration-700"
+              style={{ width: `${Math.round(ind.trend.strength * 100)}%`, background: tm.bar }}
+            />
+          </span>
+          <span className="tick-num font-mono text-[9.5px] font-bold">{Math.round(ind.trend.strength * 100)}%</span>
+        </span>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* leyenda de EMAs */}
+          <div className="hidden items-center gap-3 font-mono text-[9px] text-mist-500 2xl:flex">
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 bg-long-400/80" /> liq. longs
+              <span className="h-[2px] w-4 bg-long-300" /> EMA {cfg.fast}
+              <b className="tick-num text-mist-300">{fmtPrice(lastFast, state.meta.decimals)}</b>
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 bg-short-400/80" /> liq. shorts
+              <span className="h-[2px] w-4 bg-flare-400" /> EMA {cfg.slow}
+              <b className="tick-num text-mist-300">{fmtPrice(lastSlow, state.meta.decimals)}</b>
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-8" style={{ background: "linear-gradient(90deg, rgba(45,224,192,0.1), #ffd37a, #fff)" }} />
-              intensidad
+              <span className="h-0 w-4 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
+              <b className="tick-num text-mist-300">{fmtPrice(lastTrend, state.meta.decimals)}</b>
             </span>
           </div>
+
+          {/* selector de oscilador */}
+          <div className="flex border border-ink-700 bg-ink-900/70">
+            {(["cvd", "macd", "rsi"] as Osc[]).map((o) => (
+              <button
+                key={o}
+                onClick={() => setOsc(o)}
+                className={`px-2.5 py-1 font-mono text-[10px] font-semibold uppercase transition-colors ${
+                  osc === o ? "bg-flare-400/15 text-flare-300" : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
+                }`}
+              >
+                {o}
+              </button>
+            ))}
+          </div>
+
+          {/* timeframes */}
           <div className="flex border border-ink-700 bg-ink-900/70">
             {timeframes.map((t) => (
               <button
@@ -325,11 +536,13 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
           <div
             className="pointer-events-none absolute z-20 border border-ink-600 bg-ink-900/95 px-3 py-2 font-mono text-[10px] shadow-xl"
             style={{
-              left: Math.min(hover.x + 16, width - 190),
-              top: Math.min(hover.y + 14, H - 130),
+              left: Math.min(hover.x + 16, width - 200),
+              top: Math.min(hover.y + 14, H - 150),
             }}
           >
-            <div className="mb-1 text-[9px] uppercase tracking-widest text-mist-500">{fmtHM(k.t)} UTC</div>
+            <div className="mb-1 text-[9px] uppercase tracking-widest text-mist-500">
+              {tfMin >= 1440 ? new Date(k.t).toUTCString().slice(5, 16) : fmtHM(k.t)} UTC
+            </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-mist-300">
               <span className="text-mist-600">O</span><span className="tick-num text-right">{fmtPrice(k.o, state.meta.decimals)}</span>
               <span className="text-mist-600">H</span><span className="tick-num text-right text-long-300">{fmtPrice(k.h, state.meta.decimals)}</span>
@@ -338,6 +551,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
               <span className="text-mist-600">Calor</span>
               <span className={`tick-num text-right ${hover.heat > 0.5 ? "text-flare-300" : "text-mist-400"}`}>
                 {(hover.heat * 100).toFixed(0)}%
+              </span>
+              <span className="text-mist-600">EMA {cfg.fast}/{cfg.slow}</span>
+              <span className="tick-num text-right">
+                <span className="text-long-300">{fmtPrice(ind.emaFast[hover.idx], state.meta.decimals)}</span>
+                {" / "}
+                <span className="text-flare-300">{fmtPrice(ind.emaSlow[hover.idx], state.meta.decimals)}</span>
               </span>
             </div>
           </div>

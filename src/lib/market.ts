@@ -35,6 +35,8 @@ export const TIMEFRAMES: { key: string; minutes: number }[] = [
   { key: "15m", minutes: 15 },
   { key: "1H", minutes: 60 },
   { key: "4H", minutes: 240 },
+  { key: "1D", minutes: 1440 },
+  { key: "1W", minutes: 10080 },
 ];
 
 export interface Candle { t: number; o: number; h: number; l: number; c: number; v: number; delta: number; }
@@ -128,10 +130,12 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
     if (i % 22 === 0) trend = (rand() - 0.5) * vol * 3.4;
     const o = price;
     const shock = rand() < 0.05 ? (rand() - 0.5) * vol * 6 : 0;
-    const drift = trend + (rand() - 0.5) * vol * 2.1 + shock;
+    // deriva limitada a ±16% por vela (evita velas absurdas en 1D/1W)
+    const drift = Math.max(-0.16, Math.min(0.16, trend + (rand() - 0.5) * vol * 2.1 + shock));
     const c = o * (1 + drift);
-    const h = Math.max(o, c) * (1 + rand() * vol * 0.9);
-    const l = Math.min(o, c) * (1 - rand() * vol * 0.9);
+    const wickF = Math.min(vol * 0.9, 0.06);
+    const h = Math.max(o, c) * (1 + rand() * wickF);
+    const l = Math.min(o, c) * (1 - rand() * wickF);
     const v = meta.bookBase * 9 * (0.45 + rand() * 1.6) * (1 + Math.abs(drift) / vol);
     const delta = v * (c >= o ? 0.22 + rand() * 0.55 : -(0.22 + rand() * 0.55));
     candles.push({ t: start + i * stepMs, o, h, l, c, v, delta });
