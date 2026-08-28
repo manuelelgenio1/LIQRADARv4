@@ -1,0 +1,182 @@
+import { useState } from "react";
+import type { LiqCluster, MarketState } from "../lib/market";
+import { fmtPrice, fmtUsd } from "../lib/format";
+import { hashStr } from "../lib/market";
+
+interface Props { state: MarketState; }
+
+const S = 320;
+const C = S / 2;
+
+export default function RadarScope({ state }: Props) {
+  const [hovered, setHovered] = useState<{ cl: LiqCluster; x: number; y: number } | null>(null);
+
+  const cur = state.candles[state.candles.length - 1].c;
+  const span = state.pMax - state.pMin;
+
+  const blips = state.clusters.slice(0, 8).map((cl, i) => {
+    const dist = Math.abs(cl.price - cur) / span;
+    const r = 26 + Math.min(1, dist * 2.6) * 116;
+    const jitter = (hashStr(cl.id) % 100) / 100;
+    // shorts arriba, longs abajo
+    const angle =
+      cl.side === "short"
+        ? (-150 + jitter * 120) * (Math.PI / 180)
+        : (30 + jitter * 120) * (Math.PI / 180);
+    return {
+      cl,
+      x: C + Math.cos(angle) * r,
+      y: C + Math.sin(angle) * r,
+      size: 3 + Math.sqrt(cl.sizeUsd / 1e6) * 1.5,
+      delay: (i * 0.6) % 4.8,
+    };
+  });
+
+  const longBelow = state.clusters.filter((c) => c.side === "long");
+  const shortAbove = state.clusters.filter((c) => c.side === "short");
+  const totalInRange = state.clusters.reduce((s, c) => s + c.sizeUsd, 0);
+
+  return (
+    <section className="panel panel-corner anim-reveal flex h-full flex-col" style={{ animationDelay: "0.12s" }}>
+      <header className="flex items-center gap-3 border-b border-ink-700/50 px-4 py-3">
+        <div className="leading-none">
+          <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Radar de liquidez</h2>
+          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">barrido de clústeres · ±2.5%</p>
+        </div>
+        <span className="ml-auto flex items-center gap-1.5 border border-long-500/40 bg-long-900/30 px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-widest text-long-300">
+          <svg width="10" height="10" viewBox="0 0 10 10" className="animate-spin" style={{ animationDuration: "4.8s" }}>
+            <path d="M5 5 L5 0 A5 5 0 0 1 9.3 2.5 Z" fill="currentColor" />
+          </svg>
+          barriendo
+        </span>
+      </header>
+
+      <div className="flex-1 px-3 py-4">
+        <div className="relative mx-auto w-full max-w-[380px]">
+        <svg viewBox={`0 0 ${S} ${S}`} className="w-full" onMouseLeave={() => setHovered(null)}>
+          <defs>
+            <radialGradient id="scopeBg" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="rgba(45,224,192,0.07)" />
+              <stop offset="70%" stopColor="rgba(14,23,41,0.4)" />
+              <stop offset="100%" stopColor="rgba(7,12,22,0.7)" />
+            </radialGradient>
+          </defs>
+
+          {/* fondo */}
+          <circle cx={C} cy={C} r={148} fill="url(#scopeBg)" stroke="#1a2740" strokeWidth="1.5" />
+
+          {/* anillos */}
+          {[40, 78, 114, 148].map((r) => (
+            <circle key={r} cx={C} cy={C} r={r} fill="none" stroke="#1a2740" strokeWidth={r === 148 ? 1.5 : 1} strokeDasharray={r === 78 ? "2 5" : undefined} />
+          ))}
+          {/* cruz */}
+          <line x1={C} y1={12} x2={C} y2={S - 12} stroke="#1a2740" strokeWidth="1" />
+          <line x1={12} y1={C} x2={S - 12} y2={C} stroke="#1a2740" strokeWidth="1" />
+          {/* marcas de grados */}
+          {Array.from({ length: 24 }).map((_, i) => {
+            const a = (i * 15 * Math.PI) / 180;
+            const r1 = 142, r2 = 148;
+            return (
+              <line
+                key={i}
+                x1={C + Math.cos(a) * r1} y1={C + Math.sin(a) * r1}
+                x2={C + Math.cos(a) * r2} y2={C + Math.sin(a) * r2}
+                stroke="#253650" strokeWidth="1.5"
+              />
+            );
+          })}
+
+          {/* etiquetas de distancia */}
+          {[{ r: 40, t: "0.5%" }, { r: 78, t: "1%" }, { r: 114, t: "2%" }].map((d) => (
+            <text key={d.t} x={C + 5} y={C - d.r + 11} fill="#48597a" fontSize="8.5" fontFamily="IBM Plex Mono, monospace">
+              {d.t}
+            </text>
+          ))}
+          <text x={C} y={26} fill="#5f7396" fontSize="8.5" textAnchor="middle" fontFamily="IBM Plex Mono, monospace" letterSpacing="2">
+            SHORTS ↑
+          </text>
+          <text x={C} y={S - 18} fill="#5f7396" fontSize="8.5" textAnchor="middle" fontFamily="IBM Plex Mono, monospace" letterSpacing="2">
+            LONGS ↓
+          </text>
+
+          {/* barrido */}
+          <g style={{ transformOrigin: `${C}px ${C}px`, animation: "radarSweep 4.8s linear infinite" }}>
+            <path d={`M ${C} ${C} L ${C} ${C - 146} A 146 146 0 0 1 ${C + 96} ${C - 110} Z`} fill="rgba(45,224,192,0.05)" />
+            <path d={`M ${C} ${C} L ${C} ${C - 146} A 146 146 0 0 1 ${C + 60} ${C - 133} Z`} fill="rgba(45,224,192,0.10)" />
+            <path d={`M ${C} ${C} L ${C} ${C - 146} A 146 146 0 0 1 ${C + 26} ${C - 143.6} Z`} fill="rgba(45,224,192,0.20)" />
+            <line x1={C} y1={C} x2={C} y2={C - 146} stroke="#7df0da" strokeWidth="1.8" />
+          </g>
+
+          {/* blips */}
+          {blips.map((b) => {
+            const col = b.cl.side === "long" ? "#2de0c0" : "#ff5d7e";
+            const isHov = hovered?.cl.id === b.cl.id;
+            return (
+              <g
+                key={b.cl.id}
+                onMouseEnter={() => setHovered({ cl: b.cl, x: b.x, y: b.y })}
+                style={{ cursor: "pointer" }}
+              >
+                <circle cx={b.x} cy={b.y} r={b.size + 10} fill="transparent" />
+                <circle
+                  cx={b.x} cy={b.y} r={b.size + 3}
+                  fill="none" stroke={col} strokeWidth="1"
+                  style={{
+                    transformOrigin: `${b.x}px ${b.y}px`,
+                    animation: `blipPulse 2.4s ease-in-out ${b.delay}s infinite`,
+                  }}
+                />
+                <circle cx={b.x} cy={b.y} r={b.size} fill={col} opacity={isHov ? 1 : 0.8} stroke="#070c16" strokeWidth="1" />
+                {isHov && <circle cx={b.x} cy={b.y} r={b.size + 7} fill="none" stroke={col} strokeWidth="1" strokeDasharray="3 3" />}
+              </g>
+            );
+          })}
+
+          {/* centro */}
+          <circle cx={C} cy={C} r="5" fill="#dbe6f7" />
+          <circle cx={C} cy={C} r="9" fill="none" stroke="rgba(219,230,247,0.4)" strokeWidth="1" />
+        </svg>
+
+        {/* tooltip del blip */}
+        {hovered && (
+          <div
+            className="pointer-events-none absolute z-20 -translate-x-1/2 border border-ink-600 bg-ink-900/95 px-3 py-2 text-center font-mono text-[10px] shadow-xl"
+            style={{
+              left: `${(hovered.x / S) * 100}%`,
+              top: `calc(${(hovered.y / S) * 100}% + 26px)`,
+            }}
+          >
+            <div className={`font-semibold ${hovered.cl.side === "long" ? "text-long-300" : "text-short-300"}`}>
+              {hovered.cl.side === "long" ? "LIQ. LONGS" : "LIQ. SHORTS"} · {hovered.cl.leverage}
+            </div>
+            <div className="tick-num mt-0.5 text-mist-200">
+              {fmtPrice(hovered.cl.price, state.meta.decimals)} · {fmtUsd(hovered.cl.sizeUsd)}
+            </div>
+            <div className="mt-0.5 text-[9px] uppercase tracking-widest text-mist-600">{hovered.cl.exchange}</div>
+          </div>
+        )}
+        </div>
+      </div>
+
+      {/* resumen inferior */}
+      <footer className="grid grid-cols-3 divide-x divide-ink-700/50 border-t border-ink-700/50 bg-ink-900/50">
+        <div className="px-3 py-2.5 text-center">
+          <div className="font-mono text-[9px] uppercase tracking-widest text-mist-600">Longs ↓</div>
+          <div className="tick-num mt-0.5 font-display text-sm font-bold text-long-300">
+            {longBelow.length} · {fmtUsd(longBelow.reduce((s, c) => s + c.sizeUsd, 0))}
+          </div>
+        </div>
+        <div className="px-3 py-2.5 text-center">
+          <div className="font-mono text-[9px] uppercase tracking-widest text-mist-600">En rango</div>
+          <div className="tick-num mt-0.5 font-display text-sm font-bold text-flare-300">{fmtUsd(totalInRange)}</div>
+        </div>
+        <div className="px-3 py-2.5 text-center">
+          <div className="font-mono text-[9px] uppercase tracking-widest text-mist-600">Shorts ↑</div>
+          <div className="tick-num mt-0.5 font-display text-sm font-bold text-short-300">
+            {shortAbove.length} · {fmtUsd(shortAbove.reduce((s, c) => s + c.sizeUsd, 0))}
+          </div>
+        </div>
+      </footer>
+    </section>
+  );
+}
