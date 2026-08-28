@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { MarketState, SymbolMeta } from "../lib/market";
+import type { Source } from "../hooks/useMarketEngine";
+import type { TickerInfo } from "../lib/live";
 import { fmtClock, fmtPct, fmtPrice } from "../lib/format";
 
 function RadarLogo() {
@@ -26,17 +28,28 @@ interface Props {
   setSymbol: (s: string) => void;
   paused: boolean;
   setPaused: (p: boolean) => void;
+  source: Source;
+  livePrices: Record<string, TickerInfo>;
 }
 
-export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused, setPaused }: Props) {
+const SOURCE_CHIP: Record<Source, { t: string; c: string }> = {
+  live: { t: "LIVE · BINANCE", c: "border-long-500/50 bg-long-900/40 text-long-300" },
+  sim: { t: "SIMULADO", c: "border-flare-400/50 bg-flare-400/10 text-flare-300" },
+  connecting: { t: "CONECTANDO…", c: "border-ink-600 bg-ink-800 text-mist-400" },
+};
+
+export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused, setPaused, source, livePrices }: Props) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
 
-  const price = state.candles[state.candles.length - 1].c;
-  const up = state.change24h >= 0;
+  const lp = livePrices[meta.symbol];
+  const price = lp ? lp.price : state.candles[state.candles.length - 1].c;
+  const change = lp ? lp.change24h : state.change24h;
+  const up = change >= 0;
+  const chip = SOURCE_CHIP[source];
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-700/60 bg-ink-900/85 backdrop-blur-md">
@@ -50,7 +63,7 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
             </div>
             <div className="mt-1 flex items-center gap-1.5">
               <span className="border border-long-500/40 bg-long-900/40 px-1 font-mono text-[9px] font-semibold tracking-widest text-long-300">v2.1</span>
-              <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-mist-500">mapa de liquidez</span>
+              <span className={`border px-1 font-mono text-[9px] font-semibold tracking-widest ${chip.c}`}>{chip.t}</span>
             </div>
           </div>
         </div>
@@ -61,6 +74,7 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
         <nav className="scroll-slim hidden items-center gap-1 overflow-x-auto md:flex">
           {symbols.map((s) => {
             const active = s.symbol === symbol;
+            const sp = livePrices[s.symbol];
             return (
               <button
                 key={s.symbol}
@@ -72,6 +86,11 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
                 }`}
               >
                 {s.base}
+                {sp && (
+                  <span className={`ml-1.5 text-[9px] ${sp.change24h >= 0 ? "text-long-400" : "text-short-400"}`}>
+                    {sp.change24h >= 0 ? "▲" : "▼"}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -93,10 +112,12 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
                   up ? "border-long-500/40 bg-long-900/50 text-long-300" : "border-short-500/40 bg-short-900/50 text-short-300"
                 }`}
               >
-                {fmtPct(state.change24h)}
+                {fmtPct(change)}
               </span>
             </div>
-            <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.2em] text-mist-600">perpetuo · usdt</div>
+            <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.2em] text-mist-600">
+              {source === "live" ? "perpetuo · usdt · ws en vivo" : "perpetuo · usdt"}
+            </div>
           </div>
 
           <div className="hidden h-9 w-px bg-ink-700/70 lg:block" />

@@ -138,6 +138,14 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
     price = c;
   }
 
+  return deriveState(meta, tfMinutes, candles, seed);
+}
+
+// Deriva el estado completo (calor, clústeres, libro, métricas) a partir de velas
+function deriveState(meta: SymbolMeta, tfMinutes: number, candles: Candle[], seed: number): MarketState {
+  const rand = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+  const now = Date.now();
+
   // rango de precios
   let lo = Infinity, hi = -Infinity;
   for (const k of candles) { lo = Math.min(lo, k.l); hi = Math.max(hi, k.h); }
@@ -335,25 +343,28 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
 // ---------- tick en vivo ----------
 let evtSeq = 0;
 
-export function tickMarket(s: MarketState): MarketState {
+export function tickMarket(s: MarketState, opts: { drift?: boolean } = {}): MarketState {
   const rand = Math.random;
   const meta = s.meta;
+  const withDrift = opts.drift !== false;
   const candles = s.candles.slice();
   const last = { ...candles[candles.length - 1] };
   const vol = meta.vol * Math.sqrt(s.tfMinutes / 5);
-  const drift = (rand() - 0.485) * vol * 0.55;
-  const prevC = last.c;
-  last.c = last.c * (1 + drift);
-  last.h = Math.max(last.h, last.c);
-  last.l = Math.min(last.l, last.c);
-  const dV = meta.bookBase * (0.4 + rand() * 1.4);
-  last.v += dV;
-  last.delta += dV * (last.c >= prevC ? 0.35 + rand() * 0.5 : -(0.35 + rand() * 0.5));
-  candles[candles.length - 1] = last;
+  const drift = withDrift ? (rand() - 0.485) * vol * 0.55 : 0;
+  if (withDrift) {
+    const prevC = last.c;
+    last.c = last.c * (1 + drift);
+    last.h = Math.max(last.h, last.c);
+    last.l = Math.min(last.l, last.c);
+    const dV = meta.bookBase * (0.4 + rand() * 1.4);
+    last.v += dV;
+    last.delta += dV * (last.c >= prevC ? 0.35 + rand() * 0.5 : -(0.35 + rand() * 0.5));
+    candles[candles.length - 1] = last;
+  }
 
   // ocasionalmente nace una vela nueva
   let rolled = false;
-  if (rand() < 0.045) {
+  if (withDrift && rand() < 0.045) {
     rolled = true;
     candles.shift();
     candles.push({
@@ -459,4 +470,39 @@ export function tickMarket(s: MarketState): MarketState {
     totalLiq24hShort,
     change24h: ((last.c - s.candles[0].o) / s.candles[0].o) * 100,
   };
+}
+
+// Construye el estado completo a partir de velas reales (klines de Binance)
+export function marketFromKlines(meta: SymbolMeta, tfMinutes: number, klines: Candle[], seed: number): MarketState {
+  let candles = klines.slice(-CANDLE_COUNT);
+  if (candles.length < CANDLE_COUNT) {
+    const first = candles[0];
+    const stepMs = tfMinutes * 60_000;
+    const pad: Candle[] = [];
+    for (let i = candles.length; i < CANDLE_COUNT; i++) {
+      pad.unshift({
+        t: first.t - stepMs * (i - candles.length + 1),
+        o: first.o, h: first.h, l: first.l, c: first.c,
+        v: first.v * 0.6, delta: 0,
+      });
+    }
+    candles = [...pad, ...candles];
+  }
+  return deriveState(meta, tfMinutes, candles, seed);
+}
+
+// Ancla la última vela al precio real que llega por websocket
+export function patchPrice(s: MarketState, price: number): MarketState {
+  if (!Number.isFinite(price) || price <= 0) return s;
+  const candles = s.candles.slice();
+  const last = { ...candles[candles.length - 1] };
+  last.c = price;
+  last.h = Math.max(last.h, price);
+  last.l = Math.min(last.l, price);
+  candles[candles.length - 1] = last;
+  let pMin = s.pMin, pMax = s.pMax;
+  const span = pMax - pMin;
+  if (price < pMin + span * 0.05) pMin = price - span * 0.06;
+  if (price > pMax - span * 0.05) pMax = price + span * 0.06;
+  return { ...s, candles, pMin, pMax, change24h: ((price - s.candles[0].o) / s.candles[0].o) * 100 };
 }
