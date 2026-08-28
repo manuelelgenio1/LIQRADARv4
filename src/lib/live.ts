@@ -17,6 +17,7 @@ export interface TickerInfo {
   symbol: string;
   price: number;
   change24h: number;
+  eventTime: number; // timestamp del evento en el servidor (ms) → latencia real
 }
 
 export interface BookData {
@@ -153,11 +154,16 @@ export function connectTickers(
     ws.onmessage = (ev) => {
       try {
         const j = JSON.parse(ev.data as string) as {
-          data?: { s: string; c: string; P: string };
+          data?: { s: string; c: string; P: string; E: number };
         };
         const d = j.data;
         if (d?.s && d.c) {
-          onTick({ symbol: d.s, price: Number(d.c), change24h: Number(d.P) });
+          onTick({
+            symbol: d.s,
+            price: Number(d.c),
+            change24h: Number(d.P),
+            eventTime: Number(d.E) || 0,
+          });
         }
       } catch {
         /* mensaje malformado: se ignora */

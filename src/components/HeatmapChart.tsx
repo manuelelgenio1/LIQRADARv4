@@ -112,6 +112,19 @@ function sampleRamp(t: number, stops: Stop[]): [number, number, number, number] 
 }
 const HEAT_ROWS = 160; // resolución vertical del render térmico (suavizado por interpolación)
 
+// Safari < 17 no soporta ctx.filter: se detecta una sola vez y se usa un
+// glow aproximado (doble pasada ampliada) cuando no está disponible.
+const CAN_FILTER = (() => {
+  try {
+    const c = document.createElement("canvas").getContext("2d");
+    if (!c) return false;
+    c.filter = "blur(2px)";
+    return c.filter === "blur(2px)";
+  } catch {
+    return false;
+  }
+})();
+
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
 export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Props) {
@@ -162,7 +175,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       e.preventDefault();
       const dirn = e.deltaY > 0 ? 1 : -1; // +1 alejar, −1 acercar
       setVisibleCount((v) => {
-        const step = Math.max(2, Math.round(v * 0.14));
+        const step = Math.max(1, Math.round(v * 0.12));
         return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, v + dirn * step));
       });
     };
@@ -314,10 +327,17 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.globalAlpha = 0.3;
-    ctx.filter = "blur(5px)";
-    ctx.drawImage(off, 0, plotTop, plotW, plotH);
+    if (CAN_FILTER) {
+      ctx.filter = "blur(5px)";
+      ctx.drawImage(off, 0, plotTop, plotW, plotH);
+      ctx.filter = "none";
+    } else {
+      // fallback sin ctx.filter: doble pasada ligeramente ampliada
+      ctx.drawImage(off, -plotW * 0.004, plotTop - plotH * 0.01, plotW * 1.008, plotH * 1.02);
+      ctx.globalAlpha = 0.16;
+      ctx.drawImage(off, -plotW * 0.012, plotTop - plotH * 0.028, plotW * 1.024, plotH * 1.056);
+    }
     ctx.restore();
-    ctx.filter = "none";
 
     // marcadores de clústeres (línea reforzada + halo para destacar sobre el calor)
     for (const cl of clusters.slice(0, 6)) {
@@ -696,7 +716,13 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     const idx = view.start + vIdx;
     const price = view.yMax - ((yy - PAD_T) / (plotBottom - PAD_T)) * (view.yMax - view.yMin);
     const bin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((price - state.pMin) / (state.pMax - state.pMin)) * (HEAT_BINS - 1))));
-    const heat = state.heat[idx * HEAT_BINS + bin] / state.heatMax;
+    // mismo máximo de ventana que usa el canvas, para que el % del tooltip
+    // coincida con la intensidad realmente dibujada al hacer zoom
+    let heatVisMax = 0;
+    for (let i = view.start; i < CANDLE_COUNT; i++)
+      for (let b = 0; b < HEAT_BINS; b++) heatVisMax = Math.max(heatVisMax, state.heat[i * HEAT_BINS + b]);
+    if (heatVisMax <= 0) heatVisMax = state.heatMax || 1;
+    const heat = state.heat[idx * HEAT_BINS + bin] / heatVisMax;
     setHover({ x, y: yy, idx, price, heat });
   };
 

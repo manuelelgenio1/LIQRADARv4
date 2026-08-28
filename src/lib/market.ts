@@ -145,6 +145,81 @@ export function generateMarket(meta: SymbolMeta, tfMinutes: number, seed: number
   return deriveState(meta, tfMinutes, candles, seed);
 }
 
+// ---------- clústeres de liquidación a partir del perfil de calor ----------
+function deriveClusters(
+  meta: SymbolMeta,
+  candles: Candle[],
+  heat: Float32Array,
+  heatMax: number,
+  pMin: number,
+  pMax: number,
+  rand: () => number
+): LiqCluster[] {
+  const curPrice = candles[CANDLE_COUNT - 1].c;
+  const binOf = (p: number) =>
+    Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((p - pMin) / (pMax - pMin)) * (HEAT_BINS - 1))));
+  const priceOf = (b: number) => pMin + (b / (HEAT_BINS - 1)) * (pMax - pMin);
+  const curBin = binOf(curPrice);
+
+  const profile = new Float32Array(HEAT_BINS);
+  const cols = 14;
+  for (let b = 0; b < HEAT_BINS; b++) {
+    let s = 0;
+    for (let i = CANDLE_COUNT - cols; i < CANDLE_COUNT; i++) s += heat[i * HEAT_BINS + b];
+    profile[b] = s / cols;
+  }
+  const peaks: { bin: number; v: number }[] = [];
+  for (let b = 2; b < HEAT_BINS - 2; b++) {
+    if (profile[b] > profile[b - 1] && profile[b] >= profile[b + 1] && profile[b] > heatMax * 0.42) {
+      peaks.push({ bin: b, v: profile[b] });
+    }
+  }
+  peaks.sort((a, b) => b.v - a.v);
+
+  const mkCluster = (bin: number, v: number): LiqCluster => {
+    const side: "long" | "short" = bin < curBin ? "long" : "short";
+    const strength = Math.max(0.28, Math.min(1, v / Math.max(heatMax, 1e-9)));
+    return {
+      id: `${meta.symbol}-${bin}`,
+      price: priceOf(bin),
+      side,
+      sizeUsd: meta.liqScale * 1e6 * strength * (0.55 + rand() * 0.9),
+      leverage: LEVERAGES[Math.floor(rand() * LEVERAGES.length)],
+      strength,
+      exchange: EXCHANGES[Math.floor(rand() * 3)],
+    };
+  };
+
+  const clusters: LiqCluster[] = [];
+  const usedBins: number[] = [];
+  for (const p of peaks) {
+    if (clusters.length >= 8) break;
+    if (Math.abs(p.bin - curBin) < 3) continue;
+    if (usedBins.some((u) => Math.abs(u - p.bin) < 4)) continue;
+    usedBins.push(p.bin);
+    clusters.push(mkCluster(p.bin, p.v));
+  }
+  // garantía: si el filtrado deja pocas zonas, se sintetizan piscinas plausibles
+  const longsN = clusters.filter((c) => c.side === "long").length;
+  const shortsN = clusters.length - longsN;
+  const wantLong = Math.max(0, 3 - longsN);
+  const wantShort = Math.max(0, 3 - shortsN);
+  for (let i = 0; i < wantLong; i++) {
+    const bin = Math.max(2, curBin - 5 - Math.floor(rand() * 14) - i * 3);
+    if (usedBins.some((u) => Math.abs(u - bin) < 4)) continue;
+    usedBins.push(bin);
+    clusters.push(mkCluster(bin, heatMax * (0.5 + rand() * 0.4)));
+  }
+  for (let i = 0; i < wantShort; i++) {
+    const bin = Math.min(HEAT_BINS - 3, curBin + 5 + Math.floor(rand() * 14) + i * 3);
+    if (usedBins.some((u) => Math.abs(u - bin) < 4)) continue;
+    usedBins.push(bin);
+    clusters.push(mkCluster(bin, heatMax * (0.5 + rand() * 0.4)));
+  }
+  clusters.sort((a, b) => b.sizeUsd - a.sizeUsd);
+  return clusters;
+}
+
 // ---------- derivación completa del estado a partir de velas ----------
 function deriveState(meta: SymbolMeta, tfMinutes: number, candles: Candle[], seed: number): MarketState {
   const rand = mulberry32(seed ^ 0x9e3779b9);
@@ -208,65 +283,9 @@ function deriveState(meta: SymbolMeta, tfMinutes: number, candles: Candle[], see
   let heatMax = 0;
   for (let i = 0; i < heat.length; i++) heatMax = Math.max(heatMax, heat[i]);
 
-  // clústeres de liquidación (perfil de las últimas columnas)
+  // clústeres de liquidación (derivados del perfil de calor reciente)
   const curPrice = candles[CANDLE_COUNT - 1].c;
-  const curBin = binOf(curPrice);
-  const profile = new Float32Array(HEAT_BINS);
-  const cols = 14;
-  for (let b = 0; b < HEAT_BINS; b++) {
-    let s = 0;
-    for (let i = CANDLE_COUNT - cols; i < CANDLE_COUNT; i++) s += heat[i * HEAT_BINS + b];
-    profile[b] = s / cols;
-  }
-  const peaks: { bin: number; v: number }[] = [];
-  for (let b = 2; b < HEAT_BINS - 2; b++) {
-    if (profile[b] > profile[b - 1] && profile[b] >= profile[b + 1] && profile[b] > heatMax * 0.42) {
-      peaks.push({ bin: b, v: profile[b] });
-    }
-  }
-  peaks.sort((a, b) => b.v - a.v);
-
-  const mkCluster = (bin: number, v: number): LiqCluster => {
-    const side: "long" | "short" = bin < curBin ? "long" : "short";
-    const strength = Math.max(0.28, Math.min(1, v / Math.max(heatMax, 1e-9)));
-    return {
-      id: `${meta.symbol}-${bin}`,
-      price: priceOf(bin),
-      side,
-      sizeUsd: meta.liqScale * 1e6 * strength * (0.55 + rand() * 0.9),
-      leverage: LEVERAGES[Math.floor(rand() * LEVERAGES.length)],
-      strength,
-      exchange: EXCHANGES[Math.floor(rand() * 3)],
-    };
-  };
-
-  const clusters: LiqCluster[] = [];
-  const usedBins: number[] = [];
-  for (const p of peaks) {
-    if (clusters.length >= 8) break;
-    if (Math.abs(p.bin - curBin) < 3) continue;
-    if (usedBins.some((u) => Math.abs(u - p.bin) < 4)) continue;
-    usedBins.push(p.bin);
-    clusters.push(mkCluster(p.bin, p.v));
-  }
-  // garantía: si el filtrado deja pocas zonas, se sintetizan piscinas plausibles
-  const longsN = clusters.filter((c) => c.side === "long").length;
-  const shortsN = clusters.length - longsN;
-  const wantLong = Math.max(0, 3 - longsN);
-  const wantShort = Math.max(0, 3 - shortsN);
-  for (let i = 0; i < wantLong; i++) {
-    const bin = Math.max(2, curBin - 5 - Math.floor(rand() * 14) - i * 3);
-    if (usedBins.some((u) => Math.abs(u - bin) < 4)) continue;
-    usedBins.push(bin);
-    clusters.push(mkCluster(bin, heatMax * (0.5 + rand() * 0.4)));
-  }
-  for (let i = 0; i < wantShort; i++) {
-    const bin = Math.min(HEAT_BINS - 3, curBin + 5 + Math.floor(rand() * 14) + i * 3);
-    if (usedBins.some((u) => Math.abs(u - bin) < 4)) continue;
-    usedBins.push(bin);
-    clusters.push(mkCluster(bin, heatMax * (0.5 + rand() * 0.4)));
-  }
-  clusters.sort((a, b) => b.sizeUsd - a.sizeUsd);
+  const clusters = deriveClusters(meta, candles, heat, heatMax, pMin, pMax, rand);
 
   // libro de órdenes agregado
   const bookStep = curPrice * 0.00045;
@@ -349,7 +368,7 @@ function deriveState(meta: SymbolMeta, tfMinutes: number, candles: Candle[], see
 // ---------- tick en vivo ----------
 let evtSeq = 0;
 
-export function tickMarket(s: MarketState, opts: { drift?: boolean } = {}): MarketState {
+export function tickMarket(s: MarketState, opts: { drift?: boolean; latencyMs?: number } = {}): MarketState {
   const rand = Math.random;
   const meta = s.meta;
   const withDrift = opts.drift !== false;
@@ -410,20 +429,30 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean } = {}): Mark
   if (rolled) { cvd.shift(); cvd.push(cvd[cvd.length - 1]); }
   cvd[cvd.length - 1] = cvd[cvd.length - 2] + last.delta;
 
-  // libro: jitter de tamaños
-  const jitterBook = (levels: BookLevel[], dirUp: boolean): BookLevel[] => {
-    let total = 0;
-    return levels.map((lv, i) => {
-      const size = lv.size * (0.965 + rand() * 0.075) + (rand() < 0.02 ? meta.bookBase * (2 + rand() * 4) : 0);
-      total += size;
-      return { ...lv, size, total, price: dirUp ? last.c + (i + 1) * last.c * 0.00045 : last.c - (i + 1) * last.c * 0.00045 };
-    });
-  };
-  const bids = jitterBook(s.bids, false);
-  const asks = jitterBook(s.asks, true);
-  const bidSum = bids[bids.length - 1].total;
-  const askSum = asks[asks.length - 1].total;
-  const imbalance = (bidSum - askSum) / (bidSum + askSum);
+  // libro / spoofing / funding / OI: solo se "mueven" en modo simulado.
+  // En live se conservan intactos los datos reales entre refrescos de la API.
+  let bids = s.bids, asks = s.asks, imbalance = s.imbalance, spoofing = s.spoofing;
+  let funding = s.funding, oi = s.oi, oiDelta1h = s.oiDelta1h, longShortRatio = s.longShortRatio;
+  if (withDrift) {
+    const jitterBook = (levels: BookLevel[], dirUp: boolean): BookLevel[] => {
+      let total = 0;
+      return levels.map((lv, i) => {
+        const size = lv.size * (0.965 + rand() * 0.075) + (rand() < 0.02 ? meta.bookBase * (2 + rand() * 4) : 0);
+        total += size;
+        return { ...lv, size, total, price: dirUp ? last.c + (i + 1) * last.c * 0.00045 : last.c - (i + 1) * last.c * 0.00045 };
+      });
+    };
+    bids = jitterBook(s.bids, false);
+    asks = jitterBook(s.asks, true);
+    const bidSum = bids[bids.length - 1].total;
+    const askSum = asks[asks.length - 1].total;
+    imbalance = (bidSum - askSum) / (bidSum + askSum);
+    spoofing = Math.min(97, Math.max(8, s.spoofing + (rand() - 0.5) * 5));
+    funding = Math.max(-0.09, Math.min(0.09, s.funding + (rand() - 0.5) * 0.0016));
+    oi = s.oi * (1 + (rand() - 0.47) * 0.0035);
+    oiDelta1h = s.oiDelta1h + (rand() - 0.5) * 0.12;
+    longShortRatio = Math.min(1.9, Math.max(0.55, s.longShortRatio + (rand() - 0.5) * 0.02));
+  }
 
   // eventos de liquidación
   const events = s.events.slice();
@@ -448,7 +477,11 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean } = {}): Mark
   }
 
   const latency = s.latency.slice();
-  latency.push(7 + rand() * 30 + (rand() < 0.06 ? 40 + rand() * 60 : 0));
+  latency.push(
+    opts.latencyMs != null
+      ? Math.max(2, Math.min(240, opts.latencyMs + (rand() - 0.5) * 4))
+      : 7 + rand() * 30 + (rand() < 0.06 ? 40 + rand() * 60 : 0)
+  );
   if (latency.length > 44) latency.shift();
 
   return {
@@ -462,12 +495,12 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean } = {}): Mark
     bids,
     asks,
     imbalance,
-    spoofing: Math.min(97, Math.max(8, s.spoofing + (rand() - 0.5) * 5)),
-    funding: Math.max(-0.09, Math.min(0.09, s.funding + (rand() - 0.5) * 0.0016)),
+    spoofing,
+    funding,
     fundingNextMs: s.fundingNextMs <= 700 ? 8 * 3600_000 : s.fundingNextMs - 700,
-    oi: s.oi * (1 + (rand() - 0.47) * 0.0035),
-    oiDelta1h: s.oiDelta1h + (rand() - 0.5) * 0.12,
-    longShortRatio: Math.min(1.9, Math.max(0.55, s.longShortRatio + (rand() - 0.5) * 0.02)),
+    oi,
+    oiDelta1h,
+    longShortRatio,
     latency,
     msgsPerSec: Math.max(18, s.msgsPerSec + (rand() - 0.5) * 14),
     events,
@@ -581,5 +614,11 @@ export function mergeLiveKlines(s: MarketState, klines: Candle[]): MarketState {
   let lo = Infinity, hi = -Infinity;
   for (const k of candles) { lo = Math.min(lo, k.l); hi = Math.max(hi, k.h); }
   const pad = (hi - lo) * 0.045;
-  return { ...s, candles, heat, cvd, pMin: lo - pad, pMax: hi + pad };
+  // re-deriva los clústeres sobre la ventana actualizada para que el radar,
+  // la lista de zonas y el market-maker path no queden obsoletos
+  const clusters = deriveClusters(
+    s.meta, candles, heat, s.heatMax, lo - pad, hi + pad,
+    mulberry32((Date.now() ^ 0x5f356495) >>> 0)
+  );
+  return { ...s, candles, heat, cvd, clusters, pMin: lo - pad, pMax: hi + pad };
 }

@@ -74,6 +74,8 @@ export function useMarketEngine() {
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const lastPatchRef = useRef(0);
+  // latencia real medida: hora local − hora del evento en el servidor
+  const wsLatencyRef = useRef<number | null>(null);
 
   const meta: SymbolMeta = useMemo(
     () => SYMBOLS.find((s) => s.symbol === symbol) ?? SYMBOLS[0],
@@ -143,6 +145,11 @@ export function useMarketEngine() {
   useEffect(() => {
     return connectTickers(SYMBOLS.map((s) => s.symbol), (t) => {
       setLivePrices((p) => ({ ...p, [t.symbol]: t }));
+      if (t.eventTime > 0) {
+        const raw = Date.now() - t.eventTime;
+        // filtro de valores atípicos (relojes desincronizados)
+        if (raw > -500 && raw < 4000) wsLatencyRef.current = raw;
+      }
       const now = Date.now();
       // throttle: evita redibujar el canvas en cada mensaje del socket
       if (pausedRef.current || now - lastPatchRef.current < 220) return;
@@ -158,7 +165,13 @@ export function useMarketEngine() {
     if (paused || source === "connecting") return;
     const live = source === "live";
     const id = window.setInterval(
-      () => setState((s) => tickMarket(s, { drift: !live })),
+      () =>
+        setState((s) =>
+          tickMarket(s, {
+            drift: !live,
+            latencyMs: live && wsLatencyRef.current != null ? wsLatencyRef.current : undefined,
+          })
+        ),
       live ? 750 : 700
     );
     return () => window.clearInterval(id);
