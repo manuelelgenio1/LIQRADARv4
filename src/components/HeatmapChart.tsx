@@ -79,23 +79,38 @@ function TrendIcon({ dir }: { dir: TrendDir }) {
   );
 }
 
-function buildRamp(kind: "long" | "short"): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < 26; i++) {
-    const t = i / 25;
-    const a = 0.045 + Math.pow(t, 1.12) * 0.85;
-    if (kind === "long") {
-      const hue = 168 - t * 118;
-      out.push(`hsla(${hue}, 92%, ${42 + t * 32}%, ${a})`);
-    } else {
-      const hue = 350 + t * 38;
-      out.push(`hsla(${hue}, 92%, ${44 + t * 30}%, ${a})`);
+// ---- rampa térmica de alta calidad (estilo mapa de liquidaciones profesional) ----
+type Stop = [number, number, number, number, number]; // pos, r, g, b, a
+const LONG_STOPS: Stop[] = [
+  [0.0, 6, 14, 30, 0],
+  [0.16, 10, 44, 60, 55],
+  [0.38, 13, 104, 110, 118],
+  [0.6, 24, 172, 158, 172],
+  [0.8, 84, 226, 206, 220],
+  [1.0, 214, 255, 245, 250],
+];
+const SHORT_STOPS: Stop[] = [
+  [0.0, 30, 8, 18, 0],
+  [0.16, 62, 16, 34, 55],
+  [0.38, 124, 26, 56, 118],
+  [0.6, 202, 48, 90, 172],
+  [0.8, 250, 102, 136, 220],
+  [1.0, 255, 218, 227, 250],
+];
+function sampleRamp(t: number, stops: Stop[]): [number, number, number, number] {
+  if (t <= stops[0][0]) return [stops[0][1], stops[0][2], stops[0][3], 0];
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const [p0, r0, g0, b0, a0] = stops[i - 1];
+      const [p1, r1, g1, b1, a1] = stops[i];
+      const k = (t - p0) / (p1 - p0);
+      return [r0 + (r1 - r0) * k, g0 + (g1 - g0) * k, b0 + (b1 - b0) * k, a0 + (a1 - a0) * k];
     }
   }
-  return out;
+  const L = stops[stops.length - 1];
+  return [L[1], L[2], L[3], L[4]];
 }
-const LONG_RAMP = buildRamp("long");
-const SHORT_RAMP = buildRamp("short");
+const HEAT_ROWS = 160; // resolución vertical del render térmico (suavizado por interpolación)
 
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
@@ -107,6 +122,9 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
   const [osc, setOsc] = useState<Osc>("cvd");
   const [visibleCount, setVisibleCount] = useState(() => loadZoom(tfKey));
   const [levOn, setLevOn] = useState<Record<number, boolean>>(loadLevOn);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [chartH, setChartH] = useState(H);
+  const offRef = useRef<HTMLCanvasElement | null>(null);
 
   // preferencia de escalera de apalancamiento persistida
   useEffect(() => {
@@ -174,32 +192,49 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    const ro = new ResizeObserver(() => {
+      setWidth(el.clientWidth);
+      setChartH(el.clientHeight);
+    });
     ro.observe(el);
     setWidth(el.clientWidth);
+    setChartH(el.clientHeight || H);
     return () => ro.disconnect();
-  }, []);
+  }, [fullscreen]);
+
+  // ESC cierra la pantalla completa + bloquea el scroll del fondo
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [fullscreen]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     canvas.width = width * dpr;
-    canvas.height = H * dpr;
+    canvas.height = chartH * dpr;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, H);
+    ctx.clearRect(0, 0, width, chartH);
 
     const { candles, heat, pMin, pMax, meta, cvd, clusters } = state;
     const plotW = width - SCALE_W;
     const plotTop = PAD_T;
-    const plotBottom = H - TIME_H - SUB_H - 12;
+    const plotBottom = chartH - TIME_H - SUB_H - 12;
     const plotH = plotBottom - plotTop;
     const lastC = candles[CANDLE_COUNT - 1].c;
     const y = (p: number) => plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
     const cellW = plotW / visibleCount;
-    const priceOfBin = (b: number) => pMin + (b / (HEAT_BINS - 1)) * (pMax - pMin);
 
     // tinte de fondo según el consenso de tendencia
     const tint = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
@@ -230,25 +265,59 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.fillText(fmtPrice(p, meta.decimals), plotW + 8, gy);
     }
 
-    // celdas de calor (mapeadas por precio al rango visible)
+    // ---- render térmico suavizado (offscreen + interpolación bilineal + bloom) ----
     let heatVisMax = 0;
     for (let i = view.start; i < CANDLE_COUNT; i++)
       for (let b = 0; b < HEAT_BINS; b++) heatVisMax = Math.max(heatVisMax, heat[i * HEAT_BINS + b]);
     if (heatVisMax <= 0) heatVisMax = state.heatMax || 1;
-    const cellH = plotH / HEAT_BINS;
-    for (let i = view.start; i < CANDLE_COUNT; i++) {
-      const x = (i - view.start) * cellW;
-      for (let b = 0; b < HEAT_BINS; b++) {
-        const v = heat[i * HEAT_BINS + b];
-        if (v / heatVisMax < 0.055) continue;
-        const bp = priceOfBin(b);
-        if (bp < view.yMin || bp > view.yMax) continue;
+
+    if (!offRef.current) {
+      offRef.current = document.createElement("canvas");
+    }
+    const off = offRef.current;
+    off.width = visibleCount;
+    off.height = HEAT_ROWS;
+    const octx = off.getContext("2d")!;
+    const img = octx.createImageData(visibleCount, HEAT_ROWS);
+    const px = img.data;
+    const spanFull = pMax - pMin || 1;
+    const spanView = view.yMax - view.yMin || 1;
+    for (let r = 0; r < HEAT_ROWS; r++) {
+      const price = view.yMax - ((r + 0.5) / HEAT_ROWS) * spanView;
+      const fb = ((price - pMin) / spanFull) * (HEAT_BINS - 1);
+      const b0 = Math.max(0, Math.min(HEAT_BINS - 1, Math.floor(fb)));
+      const b1 = Math.max(0, Math.min(HEAT_BINS - 1, Math.ceil(fb)));
+      const frac = Math.max(0, Math.min(1, fb - b0));
+      const isLongSide = price < lastC;
+      const stops = isLongSide ? LONG_STOPS : SHORT_STOPS;
+      for (let c = 0; c < visibleCount; c++) {
+        const i = view.start + c;
+        const idx4 = (r * visibleCount + c) * 4;
+        const v = heat[i * HEAT_BINS + b0] * (1 - frac) + heat[i * HEAT_BINS + b1] * frac;
         const t = Math.min(1, Math.pow(v / heatVisMax, 1.25));
-        const ramp = bp < lastC ? LONG_RAMP : SHORT_RAMP;
-        ctx.fillStyle = ramp[Math.round(t * 25)];
-        ctx.fillRect(x, y(bp) - cellH / 2, cellW + 0.5, cellH + 0.5);
+        if (t < 0.045) {
+          px[idx4 + 3] = 0;
+          continue;
+        }
+        const [cr, cg, cb, ca] = sampleRamp(t, stops);
+        px[idx4] = cr;
+        px[idx4 + 1] = cg;
+        px[idx4 + 2] = cb;
+        px[idx4 + 3] = ca;
       }
     }
+    octx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(off, 0, plotTop, plotW, plotH);
+    // bloom: segunda pasada desenfocada aditiva para resaltar las zonas calientes
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.3;
+    ctx.filter = "blur(5px)";
+    ctx.drawImage(off, 0, plotTop, plotW, plotH);
+    ctx.restore();
+    ctx.filter = "none";
 
     // marcadores de clústeres (línea reforzada + halo para destacar sobre el calor)
     for (const cl of clusters.slice(0, 6)) {
@@ -419,12 +488,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
     ctx.textAlign = "center";
     const step = Math.max(4, Math.round(visibleCount / 6));
     for (let i = view.start + Math.floor(step / 2); i < CANDLE_COUNT; i += step) {
-      ctx.fillText(fmtAxisTime(candles[i].t, tfMin), (i - view.start) * cellW + cellW / 2, H - TIME_H / 2 - 4);
+      ctx.fillText(fmtAxisTime(candles[i].t, tfMin), (i - view.start) * cellW + cellW / 2, chartH - TIME_H / 2 - 4);
     }
 
     // --- sub-panel de oscilador (CVD / MACD / RSI / ADX) ---
     const subTop = plotBottom + 14;
-    const subBottom = H - TIME_H - 4;
+    const subBottom = chartH - TIME_H - 4;
     ctx.strokeStyle = "rgba(37,54,80,0.55)";
     ctx.beginPath();
     ctx.moveTo(0, subTop - 7);
@@ -615,14 +684,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn]);
+  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const yy = e.clientY - rect.top;
     const plotW = width - SCALE_W;
-    const plotBottom = H - TIME_H - SUB_H - 12;
+    const plotBottom = chartH - TIME_H - SUB_H - 12;
     const vIdx = Math.min(visibleCount - 1, Math.max(0, Math.floor((x / plotW) * visibleCount)));
     const idx = view.start + vIdx;
     const price = view.yMax - ((yy - PAD_T) / (plotBottom - PAD_T)) * (view.yMax - view.yMin);
@@ -641,11 +710,19 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
   const zoomed = visibleCount < CANDLE_COUNT;
 
   return (
-    <section className="panel panel-corner anim-reveal" style={{ animationDelay: "0.05s" }}>
+    <section
+      className={
+        fullscreen
+          ? "fixed inset-0 z-50 flex flex-col overflow-hidden bg-ink-950"
+          : "panel panel-corner anim-reveal"
+      }
+      style={fullscreen ? undefined : { animationDelay: "0.05s" }}
+    >
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ink-700/50 px-4 py-3">
         <div className="leading-none">
           <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
             Heatmap de liquidaciones
+            {fullscreen && <span className="ml-2 text-long-400">· pantalla completa</span>}
           </h2>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
             {state.meta.symbol} · perp ·{" "}
@@ -769,31 +846,55 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
               </button>
             ))}
           </div>
+
+          {/* pantalla completa */}
+          <button
+            onClick={() => setFullscreen((f) => !f)}
+            className={`flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest transition-all ${
+              fullscreen
+                ? "border-short-500/50 bg-short-900/50 text-short-300 hover:bg-short-900/80"
+                : "border-long-500/40 bg-long-900/30 text-long-300 hover:bg-long-900/60"
+            }`}
+            title={fullscreen ? "Salir de pantalla completa (ESC)" : "Ver en pantalla completa"}
+          >
+            {fullscreen ? (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                <path d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                <path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+            {fullscreen ? "Salir" : "Ampliar"}
+          </button>
         </div>
       </header>
 
-      {/* stats strip */}
-      <div className="grid grid-cols-2 divide-x divide-ink-700/50 border-b border-ink-700/50 bg-ink-900/50 sm:grid-cols-4">
-        {[
-          { l: "Liq. 24h longs", v: fmtUsd(state.totalLiq24hLong), c: "text-long-300" },
-          { l: "Liq. 24h shorts", v: fmtUsd(state.totalLiq24hShort), c: "text-short-300" },
-          { l: "Open interest", v: fmtUsd(state.oi, 2), c: "text-mist-200", sub: fmtPct(state.oiDelta1h, 2) + " 1h" },
-          { l: "Funding", v: fmtPct(state.funding, 4), c: state.funding >= 0 ? "text-long-300" : "text-short-300" },
-        ].map((it) => (
-          <div key={it.l} className="px-4 py-2.5">
-            <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">{it.l}</div>
-            <div className={`tick-num mt-0.5 font-display text-base font-bold ${it.c}`}>
-              {it.v}
-              {it.sub && <span className="ml-1.5 font-mono text-[9px] font-medium text-mist-500">{it.sub}</span>}
+      {/* stats strip (oculta en pantalla completa para maximizar el gráfico) */}
+      {!fullscreen && (
+        <div className="grid grid-cols-2 divide-x divide-ink-700/50 border-b border-ink-700/50 bg-ink-900/50 sm:grid-cols-4">
+          {[
+            { l: "Liq. 24h longs", v: fmtUsd(state.totalLiq24hLong), c: "text-long-300" },
+            { l: "Liq. 24h shorts", v: fmtUsd(state.totalLiq24hShort), c: "text-short-300" },
+            { l: "Open interest", v: fmtUsd(state.oi, 2), c: "text-mist-200", sub: fmtPct(state.oiDelta1h, 2) + " 1h" },
+            { l: "Funding", v: fmtPct(state.funding, 4), c: state.funding >= 0 ? "text-long-300" : "text-short-300" },
+          ].map((it) => (
+            <div key={it.l} className="px-4 py-2.5">
+              <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">{it.l}</div>
+              <div className={`tick-num mt-0.5 font-display text-base font-bold ${it.c}`}>
+                {it.v}
+                {it.sub && <span className="ml-1.5 font-mono text-[9px] font-medium text-mist-500">{it.sub}</span>}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
-      <div ref={wrapRef} className="relative">
+      <div ref={wrapRef} className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: H, display: "block", cursor: "crosshair" }}
+          style={{ width: "100%", height: fullscreen ? "100%" : H, display: "block", cursor: "crosshair" }}
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
           onDoubleClick={() => setVisibleCount(CANDLE_COUNT)}
@@ -803,7 +904,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
             className="pointer-events-none absolute z-20 border border-ink-600 bg-ink-900/95 px-3 py-2 font-mono text-[10px] shadow-xl"
             style={{
               left: Math.min(hover.x + 16, width - 220),
-              top: Math.min(hover.y + 14, H - 170),
+              top: Math.min(hover.y + 14, chartH - 170),
             }}
           >
             <div className="mb-1 text-[9px] uppercase tracking-widest text-mist-500">
