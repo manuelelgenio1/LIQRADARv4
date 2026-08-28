@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { SYMBOLS } from "../lib/market";
+import type { TickerInfo } from "../lib/live";
 import { fmtPct, fmtPrice } from "../lib/format";
 
 interface TapeItem {
@@ -10,8 +11,13 @@ interface TapeItem {
   vol: number;
 }
 
-export default function TickerTape() {
-  const [items, setItems] = useState<TapeItem[]>(() =>
+interface Props {
+  livePrices: Record<string, TickerInfo>;
+}
+
+export default function TickerTape({ livePrices }: Props) {
+  // respaldo simulado por si algún símbolo no recibe datos en vivo
+  const [sim, setSim] = useState<TapeItem[]>(() =>
     SYMBOLS.map((s) => ({
       base: s.base,
       price: s.basePrice * (1 + (Math.random() - 0.5) * 0.01),
@@ -23,7 +29,7 @@ export default function TickerTape() {
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      setItems((prev) =>
+      setSim((prev) =>
         prev.map((it) => {
           const drift = (Math.random() - 0.5) * it.vol * 2.2;
           return {
@@ -36,6 +42,14 @@ export default function TickerTape() {
     }, 1600);
     return () => window.clearInterval(id);
   }, []);
+
+  const items: TapeItem[] = SYMBOLS.map((s, i) => {
+    const lp = livePrices[s.symbol];
+    if (lp) {
+      return { base: s.base, price: lp.price, change: lp.change24h, decimals: s.decimals, vol: s.vol };
+    }
+    return sim[i];
+  });
 
   const row = (keyPrefix: string) =>
     items.map((it) => {

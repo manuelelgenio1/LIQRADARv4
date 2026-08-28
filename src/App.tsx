@@ -25,8 +25,10 @@ export default function App() {
         setSymbol={engine.setSymbol}
         paused={engine.paused}
         setPaused={engine.setPaused}
+        source={engine.source}
+        livePrices={engine.livePrices}
       />
-      <TickerTape />
+      <TickerTape livePrices={engine.livePrices} />
 
       <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 lg:px-6 lg:py-5">
         {/* fila 1: heatmap + radar */}
@@ -47,7 +49,7 @@ export default function App() {
         {/* fila 2: libro + clústeres + métricas */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
           <div className="xl:col-span-4">
-            <OrderBookPanel state={state} />
+            <OrderBookPanel state={state} live={engine.source === "live"} />
           </div>
           <div className="xl:col-span-4">
             <ClusterList state={state} />
@@ -72,7 +74,14 @@ export default function App() {
           <span>
             <span className="text-long-400">◉</span> LIQRADAR v2.1 — radar de liquidez y liquidaciones
           </span>
-          <span>feed simulado con fines educativos · no es asesoramiento financiero</span>
+          <span>
+            {engine.source === "live"
+              ? "precios, velas y libro en vivo · binance market data · liquidaciones estimadas por modelo"
+              : engine.source === "sim"
+                ? "sin conexión con binance · feed simulado con fines educativos"
+                : "conectando con binance…"}{" "}
+            · no es asesoramiento financiero
+          </span>
         </footer>
       </main>
 

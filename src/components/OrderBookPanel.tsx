@@ -1,7 +1,7 @@
 import type { BookLevel, MarketState } from "../lib/market";
 import { fmtPrice } from "../lib/format";
 
-interface Props { state: MarketState; }
+interface Props { state: MarketState; live?: boolean; }
 
 function Row({ lv, max, side, decimals }: { lv: BookLevel; max: number; side: "bid" | "ask"; decimals: number }) {
   const w = Math.min(100, (lv.total / max) * 100);
@@ -29,7 +29,7 @@ function Row({ lv, max, side, decimals }: { lv: BookLevel; max: number; side: "b
   );
 }
 
-export default function OrderBookPanel({ state }: Props) {
+export default function OrderBookPanel({ state, live }: Props) {
   const { bids, asks, meta, imbalance, spoofing } = state;
   const maxTotal = Math.max(bids[bids.length - 1].total, asks[asks.length - 1].total);
   const mid = (bids[0].price + asks[0].price) / 2;
@@ -44,8 +44,12 @@ export default function OrderBookPanel({ state }: Props) {
     <section className="panel anim-reveal flex h-full flex-col" style={{ animationDelay: "0.18s" }}>
       <header className="flex items-center gap-3 border-b border-ink-700/50 px-4 py-3">
         <div className="leading-none">
-          <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Libro agregado</h2>
-          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">binance · bybit · okx</p>
+          <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
+            Libro {live ? "en vivo" : "agregado"}
+          </h2>
+          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
+            {live ? "depth real · binance spot" : "binance · bybit · okx"}
+          </p>
         </div>
         <span className={`ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${spoofLabel.c}`}>
           spoofing {spoofLabel.t}
