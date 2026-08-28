@@ -20,6 +20,27 @@ const TIME_H = 22;
 const PAD_T = 16;
 const MIN_VIS = 24;
 const ZOOM_KEY = "liqradar:zoom:v1";
+const LEV_KEY = "liqradar:lev:v1";
+
+// Escalera de apalancamiento: distancia de liquidación ≈ 1/apalancamiento
+const LEVS = [5, 10, 20, 50, 100];
+const LEV_ALPHA: Record<number, number> = { 5: 0.4, 10: 0.48, 20: 0.58, 50: 0.72, 100: 0.9 };
+
+function loadLevOn(): Record<number, boolean> {
+  const def: Record<number, boolean> = { 5: true, 10: true, 20: true, 50: true, 100: true };
+  try {
+    const raw = localStorage.getItem(LEV_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Record<string, boolean>;
+      for (const k of Object.keys(def)) {
+        if (typeof p[k] === "boolean") def[Number(k)] = p[k];
+      }
+    }
+  } catch {
+    /* sin almacenamiento */
+  }
+  return def;
+}
 
 function loadZoom(tf: string): number {
   try {
@@ -85,6 +106,16 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
   const [hover, setHover] = useState<Hover | null>(null);
   const [osc, setOsc] = useState<Osc>("cvd");
   const [visibleCount, setVisibleCount] = useState(() => loadZoom(tfKey));
+  const [levOn, setLevOn] = useState<Record<number, boolean>>(loadLevOn);
+
+  // preferencia de escalera de apalancamiento persistida
+  useEffect(() => {
+    try {
+      localStorage.setItem(LEV_KEY, JSON.stringify(levOn));
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [levOn]);
 
   const cfg = getIndicatorCfg(tfKey);
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
@@ -219,26 +250,72 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       }
     }
 
-    // marcadores de clústeres
+    // marcadores de clústeres (línea reforzada + halo para destacar sobre el calor)
     for (const cl of clusters.slice(0, 6)) {
       const cy = y(cl.price);
       if (cy < plotTop || cy > plotBottom) continue;
       const col = cl.side === "long" ? "45,224,192" : "255,93,126";
-      ctx.strokeStyle = `rgba(${col},0.28)`;
-      ctx.setLineDash([5, 5]);
+      // halo
+      ctx.strokeStyle = `rgba(${col},0.16)`;
+      ctx.lineWidth = 4;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(0, cy);
+      ctx.lineTo(plotW, cy);
+      ctx.stroke();
+      // línea principal
+      ctx.strokeStyle = `rgba(${col},0.9)`;
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([6, 5]);
       ctx.beginPath();
       ctx.moveTo(0, cy);
       ctx.lineTo(plotW, cy);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.lineWidth = 1;
       const label = `${fmtUsd(cl.sizeUsd)} ${cl.side === "long" ? "LONG" : "SHORT"}`;
-      ctx.fillStyle = "rgba(7,12,22,0.88)";
-      ctx.fillRect(6, cy - 8, 96, 16);
-      ctx.strokeStyle = `rgba(${col},0.55)`;
-      ctx.strokeRect(6.5, cy - 7.5, 95, 15);
+      ctx.font = "600 10px 'IBM Plex Mono', monospace";
+      ctx.fillStyle = "rgba(7,12,22,0.95)";
+      ctx.fillRect(6, cy - 9, 104, 17);
+      ctx.strokeStyle = `rgba(${col},0.85)`;
+      ctx.strokeRect(6.5, cy - 8.5, 103, 16);
       ctx.fillStyle = `rgb(${col})`;
       ctx.textAlign = "left";
       ctx.fillText(label, 12, cy + 0.5);
+      ctx.font = "10px 'IBM Plex Mono', monospace";
+    }
+
+    // ---- escalera de apalancamiento (liq. ≈ precio × (1 ± 1/lev)) ----
+    for (const lev of LEVS) {
+      if (!levOn[lev]) continue;
+      const pctDist = 100 / lev;
+      const sides = [
+        { price: lastC * (1 - 1 / lev), col: "45,224,192", tag: `x${lev} ${pctDist.toFixed(0)}% L` },
+        { price: lastC * (1 + 1 / lev), col: "255,93,126", tag: `x${lev} ${pctDist.toFixed(0)}% S` },
+      ];
+      const alpha = LEV_ALPHA[lev];
+      for (const s of sides) {
+        const ly2 = y(s.price);
+        if (ly2 < plotTop + 3 || ly2 > plotBottom - 3) continue;
+        ctx.strokeStyle = `rgba(${s.col},${alpha})`;
+        ctx.lineWidth = 1.1;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, ly2);
+        ctx.lineTo(plotW, ly2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1;
+        const tw = ctx.measureText(s.tag).width;
+        const bx = plotW - tw - 18;
+        ctx.fillStyle = "rgba(7,12,22,0.92)";
+        ctx.fillRect(bx, ly2 - 8, tw + 14, 15);
+        ctx.strokeStyle = `rgba(${s.col},${Math.min(1, alpha + 0.2)})`;
+        ctx.strokeRect(bx + 0.5, ly2 - 7.5, tw + 13, 14);
+        ctx.fillStyle = `rgba(${s.col},${Math.min(1, alpha + 0.25)})`;
+        ctx.textAlign = "left";
+        ctx.fillText(s.tag, bx + 7, ly2 + 0.5);
+      }
     }
 
     // velas (solo visibles)
@@ -538,7 +615,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, hover, ind, osc, tfMin, cfg, view, visibleCount]);
+  }, [state, width, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -609,6 +686,29 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
               <span className={`h-[2px] w-4 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
               ST {cfg.atr}×{cfg.stMult}
             </span>
+          </div>
+
+          {/* escalera de apalancamiento */}
+          <div
+            className="flex items-center border border-ink-700 bg-ink-900/70"
+            title="Líneas de liquidación por apalancamiento: distancia ≈ 1/apalancamiento desde el precio actual (margen aislado)"
+          >
+            <span className="border-r border-ink-700 px-2 py-1 font-mono text-[8.5px] font-semibold uppercase tracking-[0.14em] text-mist-600">
+              Liq lev
+            </span>
+            {LEVS.map((lv) => (
+              <button
+                key={lv}
+                onClick={() => setLevOn((p) => ({ ...p, [lv]: !p[lv] }))}
+                className={`px-2 py-1 font-mono text-[10px] font-semibold transition-all duration-150 ${
+                  levOn[lv]
+                    ? "bg-flare-400/15 text-flare-300 shadow-[inset_0_-2px_0_rgba(255,178,36,0.55)]"
+                    : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+                }`}
+              >
+                {lv}×
+              </button>
+            ))}
           </div>
 
           {/* selector de oscilador */}
