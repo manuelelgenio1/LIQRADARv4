@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   generateMarket,
   marketFromKlines,
-  patchPrice,
+  mergeLiveKlines,
+  applyLiveTick,
   tickMarket,
   hashStr,
   SYMBOLS,
@@ -30,19 +31,49 @@ export interface Toast {
   side: "long" | "short";
 }
 
+// ---------- persistencia de selecciones ----------
+const LS_KEY = "liqradar:prefs:v1";
+
+interface Prefs {
+  symbol: string;
+  tfKey: string;
+  paused: boolean;
+}
+
+function loadPrefs(): Prefs {
+  const d: Prefs = { symbol: SYMBOLS[0].symbol, tfKey: "5m", paused: false };
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<Prefs>;
+      if (SYMBOLS.some((s) => s.symbol === p.symbol)) d.symbol = p.symbol as string;
+      if (TIMEFRAMES.some((t) => t.key === p.tfKey)) d.tfKey = p.tfKey as string;
+      if (typeof p.paused === "boolean") d.paused = p.paused;
+    }
+  } catch {
+    /* almacenamiento no disponible → valores por defecto */
+  }
+  return d;
+}
+
 export function useMarketEngine() {
-  const [symbol, setSymbol] = useState(SYMBOLS[0].symbol);
-  const [tfKey, setTfKey] = useState("5m");
-  const [paused, setPaused] = useState(false);
+  const [prefs] = useState<Prefs>(loadPrefs);
+  const [symbol, setSymbol] = useState(prefs.symbol);
+  const [tfKey, setTfKey] = useState(prefs.tfKey);
+  const [paused, setPaused] = useState(prefs.paused);
   const [source, setSource] = useState<Source>("connecting");
   const [livePrices, setLivePrices] = useState<Record<string, TickerInfo>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [state, setState] = useState<MarketState>(() =>
-    generateMarket(SYMBOLS[0], 5, hashStr(SYMBOLS[0].symbol + "5m") + 7)
-  );
+  const [state, setState] = useState<MarketState>(() => {
+    const m = SYMBOLS.find((s) => s.symbol === prefs.symbol) ?? SYMBOLS[0];
+    const tf = TIMEFRAMES.find((t) => t.key === prefs.tfKey)?.minutes ?? 5;
+    return generateMarket(m, tf, hashStr(m.symbol + prefs.tfKey) + 7);
+  });
+
   const lastEvtId = useRef<string | null>(null);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const lastPatchRef = useRef(0);
 
   const meta: SymbolMeta = useMemo(
     () => SYMBOLS.find((s) => s.symbol === symbol) ?? SYMBOLS[0],
@@ -52,6 +83,17 @@ export function useMarketEngine() {
     () => TIMEFRAMES.find((t) => t.key === tfKey)?.minutes ?? 5,
     [tfKey]
   );
+  const tfRef = useRef(tfMinutes);
+  tfRef.current = tfMinutes;
+
+  // guardar selecciones (sobreviven a recargas de la página)
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({ symbol, tfKey, paused }));
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [symbol, tfKey, paused]);
 
   // carga de datos reales (velas + libro + funding), con fallback simulado
   useEffect(() => {
@@ -101,34 +143,49 @@ export function useMarketEngine() {
   useEffect(() => {
     return connectTickers(SYMBOLS.map((s) => s.symbol), (t) => {
       setLivePrices((p) => ({ ...p, [t.symbol]: t }));
-      if (!pausedRef.current) {
-        setState((s) => (s.meta.symbol === t.symbol ? patchPrice(s, t.price) : s));
-      }
+      const now = Date.now();
+      // throttle: evita redibujar el canvas en cada mensaje del socket
+      if (pausedRef.current || now - lastPatchRef.current < 220) return;
+      lastPatchRef.current = now;
+      setState((s) =>
+        s.meta.symbol === t.symbol ? applyLiveTick(s, t.price, tfRef.current) : s
+      );
     });
   }, []);
 
-  // ticks: en live solo mantienen vivos los paneles (sin deriva artificial de precio)
+  // ticks: mantienen vivos los paneles (latencia, eventos, calor)
   useEffect(() => {
     if (paused || source === "connecting") return;
     const live = source === "live";
     const id = window.setInterval(
       () => setState((s) => tickMarket(s, { drift: !live })),
-      live ? 1100 : 700
+      live ? 750 : 700
     );
     return () => window.clearInterval(id);
   }, [paused, source]);
 
-  // refresco del libro real y de funding/OI mientras estamos en live
+  // refrescos en vivo: libro (1.5s), klines (20s), funding/OI (45s)
   useEffect(() => {
     if (source !== "live" || paused) return;
+
     const bookId = window.setInterval(async () => {
       try {
         const d = await fetchDepth(symbol);
-        setState((s) => ({ ...s, ...depthToState(d) }));
+        setState((s) => (s.meta.symbol === symbol ? { ...s, ...depthToState(d) } : s));
       } catch {
         /* se mantiene el último libro válido */
       }
-    }, 2600);
+    }, 1500);
+
+    const klineId = window.setInterval(async () => {
+      try {
+        const kl = await fetchKlines(symbol, toBinanceInterval(tfKey), CANDLE_COUNT);
+        setState((s) => (s.meta.symbol === symbol ? mergeLiveKlines(s, kl) : s));
+      } catch {
+        /* el websocket sigue actualizando la última vela */
+      }
+    }, 20_000);
+
     const foId = window.setInterval(async () => {
       try {
         const f = await fetchFundingOi(symbol);
@@ -144,16 +201,23 @@ export function useMarketEngine() {
         /* se mantienen las últimas métricas */
       }
     }, 45_000);
+
     return () => {
       window.clearInterval(bookId);
+      window.clearInterval(klineId);
       window.clearInterval(foId);
     };
-  }, [source, symbol, paused]);
+  }, [source, symbol, tfKey, paused]);
 
-  // alertas de liquidaciones grandes
+  // alertas de liquidaciones grandes (el bootstrap nunca dispara toast)
   useEffect(() => {
     const e = state.events[0];
     if (!e) return;
+    if (lastEvtId.current === null) {
+      // primera vez tras cargar o cambiar de símbolo: solo calibra
+      lastEvtId.current = e.id;
+      return;
+    }
     if (lastEvtId.current === e.id) return;
     lastEvtId.current = e.id;
     const threshold = state.meta.liqScale * 1e6 * 0.3;

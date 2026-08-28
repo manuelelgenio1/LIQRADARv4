@@ -474,6 +474,7 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean } = {}): Mark
 
 // Construye el estado completo a partir de velas reales (klines de Binance)
 export function marketFromKlines(meta: SymbolMeta, tfMinutes: number, klines: Candle[], seed: number): MarketState {
+  if (!klines.length) throw new Error("sin velas");
   let candles = klines.slice(-CANDLE_COUNT);
   if (candles.length < CANDLE_COUNT) {
     const first = candles[0];
@@ -491,18 +492,89 @@ export function marketFromKlines(meta: SymbolMeta, tfMinutes: number, klines: Ca
   return deriveState(meta, tfMinutes, candles, seed);
 }
 
-// Ancla la última vela al precio real que llega por websocket
-export function patchPrice(s: MarketState, price: number): MarketState {
+// Aplica un tick real del websocket: rollover de vela cuando cruza el
+// intervalo del timeframe, delta del CVD según la dirección real del
+// precio y ajuste del rango visible.
+export function applyLiveTick(s: MarketState, price: number, tfMinutes: number): MarketState {
   if (!Number.isFinite(price) || price <= 0) return s;
+  const now = Date.now();
+  const stepMs = tfMinutes * 60_000;
   const candles = s.candles.slice();
   const last = { ...candles[candles.length - 1] };
-  last.c = price;
-  last.h = Math.max(last.h, price);
-  last.l = Math.min(last.l, price);
-  candles[candles.length - 1] = last;
+  const prevC = last.c;
+  let rolled = false;
+  if (now - last.t >= stepMs) {
+    // nueva vela real alineada al intervalo
+    rolled = true;
+    candles.shift();
+    candles.push({
+      t: Math.floor(now / stepMs) * stepMs,
+      o: price, h: price, l: price, c: price, v: 0, delta: 0,
+    });
+  } else {
+    last.c = price;
+    last.h = Math.max(last.h, price);
+    last.l = Math.min(last.l, price);
+    const dc = price - prevC;
+    const mag = (Math.abs(dc) / price) * s.meta.bookBase * 240 + s.meta.bookBase * 0.02;
+    last.delta += dc >= 0 ? mag : -mag;
+    last.v += mag * 2.2;
+    candles[candles.length - 1] = last;
+  }
+
+  let heat = s.heat;
+  let cvd = s.cvd;
+  if (rolled) {
+    heat = new Float32Array(s.heat);
+    heat.copyWithin(0, HEAT_BINS);
+    for (let b = 0; b < HEAT_BINS; b++) heat[(CANDLE_COUNT - 1) * HEAT_BINS + b] = 0;
+    cvd = s.cvd.slice();
+    cvd.shift();
+    cvd.push(cvd[cvd.length - 1]);
+  }
+  cvd[cvd.length - 1] = cvd[cvd.length - 2] + candles[candles.length - 1].delta;
+
   let pMin = s.pMin, pMax = s.pMax;
-  const span = pMax - pMin;
+  const span = pMax - pMin || 1;
   if (price < pMin + span * 0.05) pMin = price - span * 0.06;
   if (price > pMax - span * 0.05) pMax = price + span * 0.06;
-  return { ...s, candles, pMin, pMax, change24h: ((price - s.candles[0].o) / s.candles[0].o) * 100 };
+
+  return {
+    ...s,
+    candles,
+    heat,
+    cvd,
+    pMin,
+    pMax,
+    change24h: ((price - candles[0].o) / candles[0].o) * 100,
+  };
+}
+
+// Fusiona klines recién descargados sin reiniciar el estado:
+// actualiza velas existentes y añade las nuevas (desplazando heat/cvd).
+export function mergeLiveKlines(s: MarketState, klines: Candle[]): MarketState {
+  if (!klines.length) return s;
+  const byT = new Map(klines.map((k) => [k.t, k]));
+  const lastT = s.candles[s.candles.length - 1].t;
+  const added = klines.filter((k) => k.t > lastT).slice(-CANDLE_COUNT);
+  let candles = s.candles.map((k) => byT.get(k.t) ?? k);
+  let heat = s.heat;
+  const cvd = s.cvd.slice();
+  if (added.length) {
+    candles = [...candles.slice(added.length), ...added];
+    heat = new Float32Array(s.heat);
+    heat.copyWithin(0, added.length * HEAT_BINS);
+    for (let c = CANDLE_COUNT - added.length; c < CANDLE_COUNT; c++) {
+      for (let b = 0; b < HEAT_BINS; b++) heat[c * HEAT_BINS + b] = 0;
+    }
+    for (let i = 0; i < added.length; i++) {
+      cvd.shift();
+      cvd.push(cvd[cvd.length - 1]);
+    }
+  }
+  cvd[cvd.length - 1] = cvd[cvd.length - 2] + candles[candles.length - 1].delta;
+  let lo = Infinity, hi = -Infinity;
+  for (const k of candles) { lo = Math.min(lo, k.l); hi = Math.max(hi, k.h); }
+  const pad = (hi - lo) * 0.045;
+  return { ...s, candles, heat, cvd, pMin: lo - pad, pMax: hi + pad };
 }
