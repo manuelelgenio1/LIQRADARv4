@@ -12,6 +12,7 @@ import LiquidationFeed from "./components/LiquidationFeed";
 import TrendConsensusPanel from "./components/TrendConsensusPanel";
 import ValidationLab from "./components/ValidationLab";
 import ConfluenceStrip from "./components/ConfluenceStrip";
+import TradingViewPanel from "./components/TradingViewPanel";
 
 // ---------- ErrorBoundary: nunca más una pantalla en blanco ----------
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
@@ -96,6 +97,9 @@ function Dashboard() {
             <RadarScope state={state} />
           </div>
         </div>
+
+        {/* gráfica interactiva de TradingView con los indicadores del radar */}
+        <TradingViewPanel symbol={engine.symbol} base={engine.meta.base} tfKey={engine.tfKey} />
 
         {/* fila 2: libro + clústeres + métricas */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
