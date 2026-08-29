@@ -25,6 +25,45 @@ const TV_INTERVAL: Record<string, string> = {
   "1m": "1", "5m": "5", "15m": "15", "1H": "60", "4H": "240", "1D": "D", "1W": "W",
 };
 
+// modo compatible: embed clásico por iframe (dominio distinto al cargador JS,
+// suele funcionar cuando el bloqueador frena s3.tradingview.com).
+// Supertrend no existe en el set clásico, por eso no tiene mapeo.
+const LEGACY_IDS: Record<string, string> = {
+  EMA: "EMA@tv-basicstudies",
+  MACD: "MACD@tv-basicstudies",
+  RSI: "RSI@tv-basicstudies",
+  ADX: "ADX@tv-basicstudies",
+  ATR: "ATR@tv-basicstudies",
+  VWAP: "VWAP@tv-basicstudies",
+  VP: "VolumeProfile@tv-basicstudies",
+};
+
+function legacySrc(tvSymbol: string, tvInterval: string, active: string[]): string {
+  const studiesParam = active.map((id) => LEGACY_IDS[id]).filter(Boolean).join(",");
+  const p = new URLSearchParams({
+    frameElementId: "tv-legacy-embed",
+    symbol: tvSymbol,
+    interval: tvInterval,
+    timezone: "Etc/UTC",
+    theme: "dark",
+    style: "1",
+    locale: "es",
+    toolbar_bg: "#0a1120",
+    enable_publishing: "false",
+    allow_symbol_change: "false",
+    hide_side_toolbar: "0",
+    save_image: "false",
+    studies: studiesParam,
+    support_host: "https://www.tradingview.com",
+  });
+  return `https://s.tradingview.com/widgetembed/?${p.toString()}`;
+}
+
+// enlace directo al gráfico en TradingView con símbolo e intervalo precargados
+function externalUrl(tvSymbol: string, tvInterval: string): string {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol)}&interval=${encodeURIComponent(tvInterval)}`;
+}
+
 const OPEN_KEY = "liqradar:tvopen:v1";
 const STUDY_KEY = "liqradar:tvstudies:v1";
 const HEIGHT_KEY = "liqradar:tvheight:v1";
@@ -66,13 +105,15 @@ function loadStudies(): string[] {
   return [...DEFAULT_ON];
 }
 
-// inyecta el widget oficial en el contenedor indicado
+// inyecta el widget oficial en el contenedor indicado;
+// onFail avisa si el script no puede cargarse (bloqueador, DNS, red…)
 function injectWidget(
   holder: HTMLDivElement,
   tvSymbol: string,
   tvInterval: string,
   studies: string[],
-  height: number
+  height: number,
+  onFail: () => void
 ) {
   holder.innerHTML = "";
   // altura explícita en px (autosize puede colapsar el iframe en layouts flex)
@@ -88,6 +129,7 @@ function injectWidget(
   script.type = "text/javascript";
   script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
   script.async = true;
+  script.onerror = onFail;
   script.text = JSON.stringify({
     width: "100%",
     height: h,
@@ -135,6 +177,8 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
   const [active, setActive] = useState<string[]>(loadStudies);
   const [heightId, setHeightId] = useState<(typeof HEIGHTS)[number]["id"]>(loadHeight);
   const [fs, setFs] = useState(false);
+  // "js" = widget oficial · "iframe" = modo compatible (fallback automático)
+  const [stage, setStage] = useState<"js" | "iframe">("js");
   const holderRef = useRef<HTMLDivElement>(null);
   const fsHolderRef = useRef<HTMLDivElement>(null);
 
@@ -147,6 +191,14 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
     () => STUDIES.filter((s) => active.includes(s.id)).map((s) => s.study),
     [active]
   );
+
+  const legacyUrl = useMemo(() => legacySrc(tvSymbol, tvInterval, active), [tvSymbol, tvInterval, active]);
+  const extUrl = externalUrl(tvSymbol, tvInterval);
+
+  // si cambia el símbolo, la temporalidad o los indicadores se reintenta el widget oficial
+  useEffect(() => {
+    setStage("js");
+  }, [tvSymbol, tvInterval, studies]);
 
   // persistencia de preferencias
   useEffect(() => {
@@ -165,24 +217,38 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
     } catch { /* sin almacenamiento */ }
   }, [heightId]);
 
-  // inyección del widget: va al contenedor activo (panel normal o pantalla completa).
+  // inyección del widget oficial en el contenedor activo (panel o pantalla completa).
   // Se mide el contenedor real y se pasa la altura explícita al widget para que
   // el iframe nunca se colapse (autosize es poco fiable en layouts flex/grid).
+  // Si el script no carga (bloqueador/red) o no crea su iframe en 7 s, se pasa
+  // automáticamente al modo compatible (iframe clásico en otro dominio).
   useEffect(() => {
+    if (stage !== "js") return;
     const holder = fs ? fsHolderRef.current : holderRef.current;
-    if (!holder || !open) return;
+    // la pantalla completa siempre muestra el gráfico aunque el panel esté oculto
+    if (!holder || (!open && !fs)) return;
+    let dead = false;
+    const fail = () => {
+      if (!dead) setStage("iframe");
+    };
     // esperar un frame a que el contenedor tenga su tamaño definitivo
     const raf = requestAnimationFrame(() => {
       const rect = holder.getBoundingClientRect();
       // −32 px: la barra de atribución que TradingView añade debajo del gráfico
-      injectWidget(holder, tvSymbol, tvInterval, studies, rect.height - 32);
+      injectWidget(holder, tvSymbol, tvInterval, studies, Math.max(300, rect.height - 32), fail);
     });
+    // watchdog: el widget oficial crea un <iframe> al inicializarse
+    const watchdog = window.setTimeout(() => {
+      if (!holder.querySelector("iframe")) fail();
+    }, 7000);
     return () => {
+      dead = true;
       cancelAnimationFrame(raf);
+      window.clearTimeout(watchdog);
       holder.innerHTML = "";
       if (fsHolderRef.current && fsHolderRef.current !== holder) fsHolderRef.current.innerHTML = "";
     };
-  }, [open, fs, tvSymbol, tvInterval, studies, heightPx]);
+  }, [open, fs, tvSymbol, tvInterval, studies, heightPx, stage]);
 
   // ESC sale de pantalla completa + bloquea el scroll del fondo
   useEffect(() => {
@@ -239,6 +305,16 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
             gráfico interactivo · sincronizado con el radar ·{" "}
             <span className="text-long-300">{tvSymbol}</span> · <span className="text-flare-300">{tfKey}</span>
+            <span
+              className={`ml-2 border px-1 py-px text-[7.5px] font-bold ${
+                stage === "js"
+                  ? "border-long-500/40 bg-long-900/50 text-long-300"
+                  : "border-flare-400/40 bg-flare-400/10 text-flare-300"
+              }`}
+              title={stage === "js" ? "Widget oficial de TradingView" : "Embed clásico: el widget oficial no pudo cargarse (revisa tu bloqueador)"}
+            >
+              {stage === "js" ? "WIDGET OFICIAL" : "MODO COMPATIBLE"}
+            </span>
           </p>
         </div>
 
@@ -310,13 +386,28 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
 
       {open && !fs && (
         <div className="relative">
-          <LoadingMark />
-          {/* el widget oficial se inyecta aquí */}
-          <div
-            ref={holderRef}
-            className="tradingview-widget-container relative z-10"
-            style={{ height: heightPx }}
-          />
+          {stage === "js" ? (
+            <>
+              <LoadingMark />
+              {/* el widget oficial se inyecta aquí */}
+              <div
+                ref={holderRef}
+                className="tradingview-widget-container relative z-10"
+                style={{ height: heightPx }}
+              />
+            </>
+          ) : (
+            /* modo compatible: iframe clásico (funciona si el bloqueador frena el widget oficial) */
+            <iframe
+              key={legacyUrl}
+              src={legacyUrl}
+              title="Gráfico de TradingView (modo compatible)"
+              style={{ height: heightPx }}
+              className="relative z-10 w-full border-0"
+              allow="fullscreen"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          )}
         </div>
       )}
 
@@ -324,17 +415,30 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
         <span>
           {active.length} indicadores activos · velas japonesas · zona UTC ·{" "}
           {HEIGHTS.find((h) => h.id === heightId)?.label.toLowerCase()}
+          {stage === "iframe" && <span className="ml-2 text-flare-300">· modo compatible</span>}
         </span>
-        <span>
-          datos del gráfico por{" "}
+        <span className="flex flex-wrap items-center gap-2">
+          {/* escape siempre disponible por si ningún embed logra cargarse */}
           <a
-            href="https://www.tradingview.com/"
+            href={extUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-mist-400 underline decoration-ink-600 underline-offset-2 transition-colors hover:text-long-300"
+            className="border border-ink-600 bg-ink-850 px-2 py-0.5 text-mist-400 transition-all hover:border-long-500/50 hover:text-long-300"
+            title="Abrir este gráfico directamente en TradingView (con símbolo y temporalidad)"
           >
-            TradingView
+            ¿no se ve? abrir en TradingView ↗
           </a>
+          <span>
+            datos por{" "}
+            <a
+              href="https://www.tradingview.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-mist-400 underline decoration-ink-600 underline-offset-2 transition-colors hover:text-long-300"
+            >
+              TradingView
+            </a>
+          </span>
         </span>
       </footer>
 
@@ -362,11 +466,24 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
             </button>
           </div>
           <div className="relative min-h-0 flex-1">
-            <LoadingMark />
-            <div
-              ref={fsHolderRef}
-              className="tradingview-widget-container relative z-10 h-full w-full"
-            />
+            {stage === "js" ? (
+              <>
+                <LoadingMark />
+                <div
+                  ref={fsHolderRef}
+                  className="tradingview-widget-container relative z-10 h-full w-full"
+                />
+              </>
+            ) : (
+              <iframe
+                key={legacyUrl}
+                src={legacyUrl}
+                title="Gráfico de TradingView a pantalla completa (modo compatible)"
+                className="relative z-10 h-full w-full border-0"
+                allow="fullscreen"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+            )}
           </div>
           <div className="pointer-events-none flex items-center justify-center gap-3 border-t border-ink-700/60 bg-ink-900/90 px-3 py-1.5 font-mono text-[9px] uppercase tracking-widest text-mist-500">
             <span>los indicadores se cambian desde la barra superior</span>
