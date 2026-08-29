@@ -14,7 +14,7 @@ function pct(v: number, digits = 0): string {
   return Number.isFinite(v) ? `${(v * 100).toFixed(digits)}%` : "—";
 }
 
-function StatusBadge({ r, now }: { r: PoolRecord; now: number }) {
+function StatusBadge({ r }: { r: PoolRecord }) {
   if (r.status === "pendiente") {
     return (
       <span className="flex items-center gap-1 border border-ink-600 bg-ink-800 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-mist-400">
@@ -154,7 +154,8 @@ export default function ValidationLab({ log, stats, symbol, decimals }: Props) {
         </div>
 
         {/* ---- bitácora de pools ---- */}
-        <div className="lg:col-span-8">
+        <div className="scroll-slim overflow-x-auto lg:col-span-8">
+          <div className="min-w-[680px]">
           <div className="grid grid-cols-[64px_46px_1fr_60px_76px_118px_54px] items-center gap-2 border-b border-ink-700/40 px-4 py-1.5 font-mono text-[8.5px] uppercase tracking-[0.16em] text-mist-600">
             <span>Detectado</span><span>Lado</span><span>Nivel del pool</span><span className="text-right">Dist.</span><span className="text-right">Nocional</span><span>Estado</span><span className="text-right">Edad</span>
           </div>
@@ -197,13 +198,14 @@ export default function ValidationLab({ log, stats, symbol, decimals }: Props) {
                   <span className="tick-num text-right font-mono text-[10px] text-mist-400">
                     {r.isControl ? "—" : fmtUsd(r.sizeUsd)}
                   </span>
-                  <span><StatusBadge r={r} now={now} /></span>
+                  <span><StatusBadge r={r} /></span>
                   <span className="tick-num text-right font-mono text-[9px] text-mist-600">
                     {r.status === "barrido" && r.sweptAt ? fmtAgo(r.sweptAt, now) : fmtAgo(r.detectedAt, now)}
                   </span>
                 </div>
               );
             })}
+          </div>
           </div>
         </div>
       </div>

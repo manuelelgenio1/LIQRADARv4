@@ -52,7 +52,20 @@ export const MOVE_PCT = 0.004;            // 0,4 % define reversión/continuaci�
 export function loadPoolLog(): PoolRecord[] {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) return JSON.parse(raw) as PoolRecord[];
+    if (raw) {
+      const parsed = JSON.parse(raw) as PoolRecord[];
+      // saneamiento: descartar registros corruptos de versiones anteriores
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (r) =>
+            r &&
+            typeof r.price === "number" &&
+            Number.isFinite(r.price) &&
+            typeof r.detectedAt === "number" &&
+            (r.status === "pendiente" || r.status === "barrido" || r.status === "expirado")
+        );
+      }
+    }
   } catch {
     /* sin almacenamiento */
   }
@@ -79,6 +92,7 @@ export function syncPools(
 ): PoolRecord[] {
   if (!Number.isFinite(price) || price <= 0) return loadPoolLog();
   const log = loadPoolLog();
+  let dirty = false;
 
   // ---- 1 · actualizar registros existentes de este símbolo ----
   for (const r of log) {
@@ -92,8 +106,10 @@ export function syncPools(
         r.status = "barrido";
         r.sweptAt = now;
         r.sweptPrice = price;
+        dirty = true;
       } else if (now - r.detectedAt > EXPIRE_MS) {
         r.status = "expirado";
+        dirty = true;
       }
     } else if (r.status === "barrido" && !r.outcome && r.sweptAt && now - r.sweptAt >= RESOLVE_MS) {
       const sp = r.sweptPrice ?? r.price;
@@ -107,6 +123,7 @@ export function syncPools(
         r.outcome = rel < -MOVE_PCT ? "reversion" : rel > MOVE_PCT ? "continuacion" : "neutral";
       }
       r.resolvedAt = now;
+      dirty = true;
     }
   }
 
@@ -121,12 +138,15 @@ export function syncPools(
 
   let registered = 0;
   for (const c of cands) {
+    // un nivel ya cuenta si está pendiente, o si fue barrido hace menos de 1 h
+    // (evita re-registrar el mismo pool y duplicar estadísticas)
     const dup = log.some(
       (r) =>
         r.symbol === symbol &&
         r.side === c.side &&
-        r.status === "pendiente" &&
-        Math.abs(r.price - c.price) / c.price < 0.0018
+        Math.abs(r.price - c.price) / c.price < 0.003 &&
+        (r.status === "pendiente" ||
+          (r.status === "barrido" && r.sweptAt != null && now - r.sweptAt < 3600_000))
     );
     if (dup) continue;
     log.unshift({
@@ -142,6 +162,7 @@ export function syncPools(
       outcome: null,
     });
     registered++;
+    dirty = true;
   }
 
   // ---- 3 · niveles de control al azar (línea base estadística) ----
@@ -166,9 +187,11 @@ export function syncPools(
       status: "pendiente",
       outcome: null,
     });
+    dirty = true;
   }
 
-  save(log);
+  // persistir solo cuando hubo cambios reales (evita escribir cada 3 s)
+  if (dirty) save(log);
   return log.slice(0, MAX_RECORDS);
 }
 
