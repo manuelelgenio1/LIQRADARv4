@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { MarketState } from "../lib/market";
 import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
 import { computeIndicators, getIndicatorCfg, type TrendDir } from "../lib/indicators";
@@ -125,6 +126,22 @@ const CAN_FILTER = (() => {
     return false;
   }
 })();
+
+// grupo de controles con etiqueta (barra de herramientas del heatmap)
+function ToolGroup({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
+  return (
+    <div className="flex shrink-0 flex-col gap-1" title={title}>
+      <span className="font-mono text-[8px] font-semibold uppercase tracking-[0.18em] text-mist-600">
+        {label}
+      </span>
+      <div className="flex items-stretch border border-ink-700 bg-ink-850/80">{children}</div>
+    </div>
+  );
+}
+
+function ToolDivider() {
+  return <span className="h-8 w-px shrink-0 self-center bg-ink-700/60" />;
+}
 
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
@@ -814,16 +831,15 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       }
       style={fullscreen ? undefined : { animationDelay: "0.05s" }}
     >
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ink-700/50 px-4 py-3">
+      {/* cabecera: identidad + tendencia + pantalla completa */}
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/50 px-4 py-2.5">
         <div className="leading-none">
           <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
             Heatmap de liquidaciones
             {fullscreen && <span className="ml-2 text-long-400">· pantalla completa</span>}
           </h2>
-          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            {state.meta.symbol} · perp ·{" "}
-            <span className="hidden sm:inline">rueda = zoom · doble clic = restablecer</span>
-            <span className="sm:hidden">energía por nivel</span>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-mist-500">
+            {state.meta.symbol} · perp · energía de liquidación por nivel
           </p>
         </div>
 
@@ -840,169 +856,128 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           <span className="tick-num font-mono text-[9.5px] font-bold">{Math.round(cons.strength * 100)}%</span>
         </span>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* leyenda */}
-          <div className="hidden items-center gap-3 font-mono text-[9px] text-mist-500 2xl:flex">
-            <span className="flex items-center gap-1.5">
-              <span className="h-[2px] w-4 bg-long-300" /> EMA {cfg.fast}
-              <b className="tick-num text-mist-300">{fmtPrice(lastFast, state.meta.decimals)}</b>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-[2px] w-4 bg-flare-400" /> EMA {cfg.slow}
-              <b className="tick-num text-mist-300">{fmtPrice(lastSlow, state.meta.decimals)}</b>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-0 w-4 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
-              <b className="tick-num text-mist-300">{fmtPrice(lastTrend, state.meta.decimals)}</b>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className={`h-[2px] w-4 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
-              ST {cfg.atr}×{cfg.stMult}
-            </span>
-          </div>
-
-          {/* escalera de apalancamiento */}
-          <div
-            className="flex items-center border border-ink-700 bg-ink-900/70"
-            title="Líneas de liquidación por apalancamiento: distancia ≈ 1/apalancamiento desde el precio actual (margen aislado)"
-          >
-            <span className="border-r border-ink-700 px-2 py-1 font-mono text-[8.5px] font-semibold uppercase tracking-[0.14em] text-mist-600">
-              Liq lev
-            </span>
-            {LEVS.map((lv) => (
-              <button
-                key={lv}
-                onClick={() => setLevOn((p) => ({ ...p, [lv]: !p[lv] }))}
-                className={`px-2 py-1 font-mono text-[10px] font-semibold transition-all duration-150 ${
-                  levOn[lv]
-                    ? "bg-flare-400/15 text-flare-300 shadow-[inset_0_-2px_0_rgba(255,178,36,0.55)]"
-                    : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
-                }`}
-              >
-                {lv}×
-              </button>
-            ))}
-          </div>
-
-          {/* selector de oscilador */}
-          <div className="flex border border-ink-700 bg-ink-900/70">
-            {(["cvd", "macd", "rsi", "adx"] as Osc[]).map((o) => (
-              <button
-                key={o}
-                onClick={() => setOsc(o)}
-                className={`px-2.5 py-1 font-mono text-[10px] font-semibold uppercase transition-colors ${
-                  osc === o ? "bg-flare-400/15 text-flare-300" : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
-                }`}
-              >
-                {o}
-              </button>
-            ))}
-          </div>
-
-          {/* escala lineal / logarítmica */}
-          <div className="flex border border-ink-700 bg-ink-900/70" title="Escala del eje de precios (útil en 1D/1W)">
-            {(["lin", "log"] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setLogScale(s === "log")}
-                className={`px-2 py-1 font-mono text-[10px] font-semibold uppercase transition-colors ${
-                  (s === "log") === logScale
-                    ? "bg-mist-200/15 text-mist-100"
-                    : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-
-          {/* control de zoom */}
-          <div className="flex items-stretch border border-ink-700 bg-ink-900/70" title="Nivel de zoom sobre la ventana de velas">
-            <button
-              onClick={() => zoomBy(1)}
-              className="px-2 font-mono text-[12px] font-bold text-mist-400 transition-colors hover:bg-ink-750 hover:text-mist-100"
-              title="Alejar (rueda hacia abajo)"
-            >
-              −
-            </button>
-            <button
-              onClick={() => setVisibleCount(CANDLE_COUNT)}
-              className={`tick-num border-x border-ink-700 px-2 py-1 font-mono text-[10px] font-semibold transition-colors hover:bg-ink-750 ${
-                zoomed ? "text-flare-300" : "text-mist-400"
-              }`}
-              title="Restablecer zoom"
-            >
-              ×{(CANDLE_COUNT / visibleCount).toFixed(1)}
-            </button>
-            <button
-              onClick={() => zoomBy(-1)}
-              className="px-2 font-mono text-[12px] font-bold text-mist-400 transition-colors hover:bg-ink-750 hover:text-mist-100"
-              title="Acercar (rueda hacia arriba)"
-            >
-              +
-            </button>
-          </div>
-
-          {/* timeframes */}
-          <div className="flex border border-ink-700 bg-ink-900/70">
-            {timeframes.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTfKey(t.key)}
-                className={`px-2 py-1 font-mono text-[10px] font-semibold transition-colors ${
-                  t.key === tfKey
-                    ? "bg-long-500/20 text-long-300"
-                    : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
-                }`}
-              >
-                {t.key}
-              </button>
-            ))}
-          </div>
-
-          {/* pantalla completa */}
-          <button
-            onClick={() => setFullscreen((f) => !f)}
-            className={`flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest transition-all ${
-              fullscreen
-                ? "border-short-500/50 bg-short-900/50 text-short-300 hover:bg-short-900/80"
-                : "border-long-500/40 bg-long-900/30 text-long-300 hover:bg-long-900/60"
-            }`}
-            title={fullscreen ? "Salir de pantalla completa (ESC)" : "Ver en pantalla completa"}
-          >
-            {fullscreen ? (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
-                <path d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            ) : (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
-                <path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            )}
-            {fullscreen ? "Salir" : "Ampliar"}
-          </button>
-        </div>
+        {/* pantalla completa */}
+        <button
+          onClick={() => setFullscreen((f) => !f)}
+          className={`ml-auto flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest transition-all ${
+            fullscreen
+              ? "border-short-500/50 bg-short-900/50 text-short-300 hover:bg-short-900/80"
+              : "border-long-500/40 bg-long-900/30 text-long-300 hover:bg-long-900/60"
+          }`}
+          title={fullscreen ? "Salir de pantalla completa (ESC)" : "Ver en pantalla completa"}
+        >
+          {fullscreen ? (
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : (
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+          {fullscreen ? "Salir" : "Ampliar"}
+        </button>
       </header>
 
-      {/* stats strip (oculta en pantalla completa para maximizar el gráfico) */}
-      {!fullscreen && (
-        <div className="grid grid-cols-2 divide-x divide-ink-700/50 border-b border-ink-700/50 bg-ink-900/50 sm:grid-cols-4">
-          {[
-            { l: "Liq. 24h longs", v: fmtUsd(state.totalLiq24hLong), c: "text-long-300" },
-            { l: "Liq. 24h shorts", v: fmtUsd(state.totalLiq24hShort), c: "text-short-300" },
-            { l: "Open interest", v: fmtUsd(state.oi, 2), c: "text-mist-200", sub: fmtPct(state.oiDelta1h, 2) + " 1h" },
-            { l: "Funding", v: fmtPct(state.funding, 4), c: state.funding >= 0 ? "text-long-300" : "text-short-300" },
-          ].map((it) => (
-            <div key={it.l} className="px-4 py-2.5">
-              <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">{it.l}</div>
-              <div className={`tick-num mt-0.5 font-display text-base font-bold ${it.c}`}>
-                {it.v}
-                {it.sub && <span className="ml-1.5 font-mono text-[9px] font-medium text-mist-500">{it.sub}</span>}
-              </div>
-            </div>
+      {/* barra de herramientas: controles agrupados por función */}
+      <div className="scroll-slim flex items-center gap-x-3 gap-y-2 overflow-x-auto border-b border-ink-700/50 bg-ink-900/60 px-4 py-2">
+        <ToolGroup label="Temporalidad">
+          {timeframes.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTfKey(t.key)}
+              className={`px-2 py-1 font-mono text-[10px] font-semibold transition-colors ${
+                t.key === tfKey
+                  ? "bg-long-500/20 text-long-300"
+                  : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
+              }`}
+            >
+              {t.key}
+            </button>
           ))}
-        </div>
-      )}
+        </ToolGroup>
+
+        <ToolDivider />
+
+        <ToolGroup label="Zoom" title="Nivel de zoom sobre la ventana de velas (rueda del ratón)">
+          <button
+            onClick={() => zoomBy(1)}
+            className="px-2 font-mono text-[12px] font-bold text-mist-400 transition-colors hover:bg-ink-750 hover:text-mist-100"
+            title="Alejar (rueda hacia abajo)"
+          >
+            −
+          </button>
+          <button
+            onClick={() => setVisibleCount(CANDLE_COUNT)}
+            className={`tick-num border-x border-ink-700 px-2 py-1 font-mono text-[10px] font-semibold transition-colors hover:bg-ink-750 ${
+              zoomed ? "text-flare-300" : "text-mist-400"
+            }`}
+            title="Restablecer zoom (doble clic en el gráfico)"
+          >
+            ×{(CANDLE_COUNT / visibleCount).toFixed(1)}
+          </button>
+          <button
+            onClick={() => zoomBy(-1)}
+            className="px-2 font-mono text-[12px] font-bold text-mist-400 transition-colors hover:bg-ink-750 hover:text-mist-100"
+            title="Acercar (rueda hacia arriba)"
+          >
+            +
+          </button>
+        </ToolGroup>
+
+        <ToolGroup label="Escala" title="Escala del eje de precios (log útil en 1D/1W)">
+          {(["lin", "log"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setLogScale(s === "log")}
+              className={`px-2 py-1 font-mono text-[10px] font-semibold uppercase transition-colors ${
+                (s === "log") === logScale
+                  ? "bg-mist-200/15 text-mist-100"
+                  : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </ToolGroup>
+
+        <ToolDivider />
+
+        <ToolGroup label="Oscilador" title="Sub-panel inferior del gráfico">
+          {(["cvd", "macd", "rsi", "adx"] as Osc[]).map((o) => (
+            <button
+              key={o}
+              onClick={() => setOsc(o)}
+              className={`px-2.5 py-1 font-mono text-[10px] font-semibold uppercase transition-colors ${
+                osc === o ? "bg-flare-400/15 text-flare-300" : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
+              }`}
+            >
+              {o}
+            </button>
+          ))}
+        </ToolGroup>
+
+        <ToolDivider />
+
+        <ToolGroup
+          label="Apalancamiento"
+          title="Líneas de liquidación: distancia ≈ 1/apalancamiento desde el precio actual (margen aislado)"
+        >
+          {LEVS.map((lv) => (
+            <button
+              key={lv}
+              onClick={() => setLevOn((p) => ({ ...p, [lv]: !p[lv] }))}
+              className={`px-2 py-1 font-mono text-[10px] font-semibold transition-all duration-150 ${
+                levOn[lv]
+                  ? "bg-flare-400/15 text-flare-300 shadow-[inset_0_-2px_0_rgba(255,178,36,0.55)]"
+                  : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+              }`}
+            >
+              {lv}×
+            </button>
+          ))}
+        </ToolGroup>
+      </div>
 
       <div ref={wrapRef} className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>
         {fullscreen && (
@@ -1016,6 +991,45 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             <span><b className="text-mist-300">ESC</b> salir</span>
           </div>
         )}
+
+        {/* leyenda flotante: indicadores sobre el gráfico + clave de colores */}
+        <div className="pointer-events-none absolute left-2 top-2 z-10 flex flex-col items-start gap-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1.5 font-mono text-[9px] text-mist-500 backdrop-blur-[2px]">
+            <span className="flex items-center gap-1.5">
+              <span className="h-[2px] w-3.5 bg-long-300" /> EMA {cfg.fast}
+              <b className="tick-num text-mist-200">{fmtPrice(lastFast, state.meta.decimals)}</b>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-[2px] w-3.5 bg-flare-400" /> EMA {cfg.slow}
+              <b className="tick-num text-mist-200">{fmtPrice(lastSlow, state.meta.decimals)}</b>
+            </span>
+            <span className="hidden items-center gap-1.5 sm:flex">
+              <span className="h-0 w-3.5 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
+              <b className="tick-num text-mist-200">{fmtPrice(lastTrend, state.meta.decimals)}</b>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className={`h-[2px] w-3.5 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
+              ST {cfg.atr}×{cfg.stMult}
+              <b className={lastStUp ? "text-long-300" : "text-short-300"}>{lastStUp ? "▲" : "▼"}</b>
+            </span>
+          </div>
+          <div className="flex items-center gap-2.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1 font-mono text-[8px] uppercase tracking-wider text-mist-500 backdrop-blur-[2px]">
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 bg-long-400/90" /> liq. longs ↓
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 bg-short-400/90" /> liq. shorts ↑
+            </span>
+            <span className="flex items-center gap-1">
+              <span
+                className="h-1.5 w-6"
+                style={{ background: "linear-gradient(90deg, rgba(45,224,192,0.1), #ffd37a, #fff)" }}
+              />
+              intensidad
+            </span>
+          </div>
+        </div>
+
         <canvas
           ref={canvasRef}
           style={{ width: "100%", height: fullscreen ? "100%" : H, display: "block", cursor: "crosshair" }}
@@ -1057,6 +1071,48 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           </div>
         )}
       </div>
+
+      {/* barra de estado: métricas clave en una línea compacta */}
+      <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ink-700/50 bg-ink-900/70 px-4 py-2 font-mono text-[9.5px] text-mist-600">
+        <span className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-long-400" />
+          Liq 24h L <b className="tick-num text-long-300">{fmtUsd(state.totalLiq24hLong)}</b>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-short-400" />
+          Liq 24h S <b className="tick-num text-short-300">{fmtUsd(state.totalLiq24hShort)}</b>
+        </span>
+        <span>
+          OI <b className="tick-num text-mist-200">{fmtUsd(state.oi, 2)}</b>{" "}
+          <span className={state.oiDelta1h >= 0 ? "text-long-300" : "text-short-300"}>
+            {fmtPct(state.oiDelta1h, 2)} 1h
+          </span>
+        </span>
+        <span>
+          Funding{" "}
+          <b className={`tick-num ${state.funding >= 0 ? "text-long-300" : "text-short-300"}`}>
+            {fmtPct(state.funding, 4)}
+          </b>
+        </span>
+        <span>
+          CVD{" "}
+          <b className={`tick-num ${state.cvd[state.cvd.length - 1] >= 0 ? "text-long-300" : "text-short-300"}`}>
+            {fmtCompact(state.cvd[state.cvd.length - 1])}
+          </b>
+        </span>
+        <span>
+          Clústeres <b className="tick-num text-flare-300">{state.clusters.length}</b>
+        </span>
+        <span className="ml-auto hidden items-center gap-2 uppercase tracking-wider md:flex">
+          <span>{tfKey}</span>
+          <span className="text-ink-600">·</span>
+          <span>{logScale ? "log" : "lin"}</span>
+          <span className="text-ink-600">·</span>
+          <span className={zoomed ? "text-flare-300" : ""}>×{(CANDLE_COUNT / visibleCount).toFixed(1)}</span>
+          <span className="text-ink-600">·</span>
+          <span>rueda = zoom · doble clic = reset</span>
+        </span>
+      </footer>
     </section>
   );
 }
