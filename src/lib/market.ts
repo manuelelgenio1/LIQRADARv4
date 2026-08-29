@@ -568,7 +568,9 @@ export function marketFromKlines(meta: SymbolMeta, tfMinutes: number, klines: Ca
     }
     candles = [...padding, ...candles];
   }
-  return deriveState(meta, tfMinutes, candles, seed);
+  // la serie completa (hasta 500 velas) queda como semilla de los indicadores;
+  // el gráfico dibuja solo las últimas CANDLE_COUNT.
+  return { ...deriveState(meta, tfMinutes, candles, seed), warm: klines };
 }
 
 // Aplica un tick real del websocket: rollover de vela cuando cruza el

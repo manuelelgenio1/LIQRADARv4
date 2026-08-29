@@ -554,10 +554,11 @@ export function useMarketEngine() {
         );
       }
 
-      // alerta: giro del Supertrend en la temporalidad activa
+      // alerta: giro CONFIRMADO del Supertrend (requiere persistencia de la vela
+      // siguiente; coincide con el filtro que usan el consenso y el heatmap)
       const cfg = getIndicatorCfg(tfKey);
       const st = supertrendSeries(s.candles, cfg.atr, cfg.stMult);
-      const up = st.up[st.up.length - 1];
+      const up = st.upConf[st.upConf.length - 1];
       if (stDirRef.current !== null && stDirRef.current !== up) {
         notify(
           `Supertrend ${up ? "ALCISTA" : "BAJISTA"} · ${s.meta.base}`,
