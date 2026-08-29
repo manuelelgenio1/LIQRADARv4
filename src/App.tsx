@@ -98,9 +98,6 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* gráfica interactiva de TradingView con los indicadores del radar */}
-        <TradingViewPanel symbol={engine.symbol} base={engine.meta.base} tfKey={engine.tfKey} />
-
         {/* fila 2: libro + clústeres + métricas */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
           <div className="xl:col-span-4">
@@ -134,6 +131,9 @@ function Dashboard() {
           decimals={engine.meta.decimals}
           lastSync={engine.lastPoolSync}
         />
+
+        {/* gráfica interactiva de TradingView con los indicadores del radar (al final, con su propio espacio) */}
+        <TradingViewPanel symbol={engine.symbol} base={engine.meta.base} tfKey={engine.tfKey} />
 
         <footer className="flex flex-col items-center justify-between gap-2 border-t border-ink-700/50 pb-4 pt-5 font-mono text-[9.5px] uppercase tracking-[0.18em] text-mist-600 sm:flex-row">
           <span>

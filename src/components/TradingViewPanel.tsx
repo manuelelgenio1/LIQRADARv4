@@ -29,11 +29,11 @@ const OPEN_KEY = "liqradar:tvopen:v1";
 const STUDY_KEY = "liqradar:tvstudies:v1";
 const HEIGHT_KEY = "liqradar:tvheight:v1";
 
-// alturas predefinidas del gráfico (px) — más generosas para ver bien la gráfica
+// alturas predefinidas del gráfico (px) — al final de la página, con espacio dedicado
 const HEIGHTS = [
-  { id: "S", px: 620, label: "Compacta" },
-  { id: "M", px: 820, label: "Normal" },
-  { id: "L", px: 1080, label: "Grande" },
+  { id: "S", px: 640, label: "Compacta" },
+  { id: "M", px: 900, label: "Normal" },
+  { id: "L", px: 1200, label: "Grande" },
 ] as const;
 
 function loadHeight(): (typeof HEIGHTS)[number]["id"] {
@@ -41,7 +41,7 @@ function loadHeight(): (typeof HEIGHTS)[number]["id"] {
     const v = localStorage.getItem(HEIGHT_KEY);
     if (v === "S" || v === "M" || v === "L") return v;
   } catch { /* valor por defecto */ }
-  return "M";
+  return "L";
 }
 
 function loadOpen(): boolean {
@@ -134,7 +134,7 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
   const holderRef = useRef<HTMLDivElement>(null);
   const fsHolderRef = useRef<HTMLDivElement>(null);
 
-  const heightPx = HEIGHTS.find((h) => h.id === heightId)?.px ?? 820;
+  const heightPx = HEIGHTS.find((h) => h.id === heightId)?.px ?? 1200;
 
   const tvInterval = TV_INTERVAL[tfKey] ?? "5";
   const tvSymbol = `BINANCE:${symbol}`;
