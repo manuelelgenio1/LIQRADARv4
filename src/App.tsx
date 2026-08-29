@@ -91,6 +91,8 @@ function Dashboard() {
               setTfKey={engine.setTfKey}
               timeframes={engine.timeframes}
               realCvd={engine.realCvd}
+              calibration={engine.calibration}
+              confluence={engine.confluence}
             />
           </div>
           <div className="xl:col-span-4">
@@ -118,7 +120,13 @@ function Dashboard() {
             <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
           </div>
           <div className="space-y-4 xl:col-span-5">
-            <TrendConsensusPanel state={state} tfKey={engine.tfKey} />
+            <TrendConsensusPanel
+              state={state}
+              tfKey={engine.tfKey}
+              calibration={engine.calibration}
+              setCalibration={engine.setCalibration}
+              confluence={engine.confluence}
+            />
             <MarketMakerPanel state={state} />
           </div>
         </div>

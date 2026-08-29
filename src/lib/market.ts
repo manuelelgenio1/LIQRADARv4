@@ -67,6 +67,9 @@ export interface MarketState {
   meta: SymbolMeta;
   tfMinutes: number;
   candles: Candle[];
+  // serie extendida (hasta 500 velas reales) usada SOLO como semilla de los
+  // indicadores; el gráfico dibuja `candles` (últimas CANDLE_COUNT).
+  warm?: Candle[];
   heat: Float32Array;
   heatMax: number;
   pMin: number;

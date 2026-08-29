@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { MarketState } from "../lib/market";
 import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
-import { computeIndicators, getIndicatorCfg, type TrendDir } from "../lib/indicators";
+import {
+  computeIndicators,
+  getIndicatorCfg,
+  sliceIndicators,
+  mtfAdjust,
+  adxThrOf,
+  type TrendDir,
+} from "../lib/indicators";
 import { fmtAxisTime, fmtCompact, fmtHM, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
 type Osc = "cvd" | "macd" | "rsi" | "adx" | "vol";
@@ -13,6 +20,8 @@ interface Props {
   setTfKey: (k: string) => void;
   timeframes: { key: string; minutes: number }[];
   realCvd?: boolean;
+  calibration?: { stAdj: number; adxThr: number };
+  confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
 }
 
 const H = 488;
@@ -268,7 +277,7 @@ function ToolDivider() {
 
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
-export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd }: Props) {
+export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd, calibration, confluence }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(900);
@@ -312,10 +321,25 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
   }, [layers]);
 
-  const cfg = getIndicatorCfg(tfKey);
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
+  // configuración efectiva con la calibración del usuario aplicada
+  const cfg = useMemo(() => {
+    const base = getIndicatorCfg(tfKey);
+    const stAdj = calibration?.stAdj ?? 0;
+    return {
+      ...base,
+      stMult: +(base.stMult * (1 + stAdj)).toFixed(2),
+      adxThr: calibration?.adxThr ?? adxThrOf(base),
+    };
+  }, [tfKey, calibration]);
 
-  const ind = useMemo(() => computeIndicators(state.candles, cfg, tfMin), [state.candles, cfg, tfMin]);
+  // semilla extendida: indicadores sobre la serie warm (hasta 500 velas reales)
+  // y recorte a las últimas CANDLE_COUNT para alinear con el gráfico.
+  const ind = useMemo(() => {
+    const src = state.warm && state.warm.length >= CANDLE_COUNT ? state.warm : state.candles;
+    const full = computeIndicators(src, cfg, tfMin);
+    return src.length > CANDLE_COUNT ? sliceIndicators(full, CANDLE_COUNT) : full;
+  }, [state.warm, state.candles, cfg, tfMin]);
 
   // líneas de sesión (PDH/PDL/PDO + sesión actual)
   const sessions = useMemo(() => computeSessions(state.candles, tfMin), [state.candles, tfMin]);
@@ -745,8 +769,8 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       ctx.moveTo(x0, y(ind.st[i - 1]));
       ctx.lineTo(x1, y(ind.st[i]));
       ctx.stroke();
-      if (ind.stUp[i] !== ind.stUp[i - 1]) {
-        // marcador de giro de tendencia
+      // marcador solo en giros CONFIRMADOS (persisten ≥1 vela): menos ruido
+      if (ind.stUpConf[i] !== ind.stUpConf[i - 1]) {
         ctx.beginPath();
         ctx.arc(x1, y(ind.st[i]), 3.2, 0, Math.PI * 2);
         ctx.fillStyle = col;
@@ -943,17 +967,18 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       ctx.fillText(`hist ${fmtCompact(hv)}`, 138, subTop + 1);
     } else if (osc === "adx") {
       const aS = slice(ind.adx), pS = slice(ind.pdi), mS = slice(ind.mdi);
+      const thr = adxThrOf(cfg);
       let mx = 40;
       for (let i = 0; i < aS.length; i++) mx = Math.max(mx, aS[i], pS[i], mS[i]);
       const ay = (v: number) => subTop + (1 - Math.min(1, v / mx)) * (subBottom - subTop);
-      // zona de tendencia fuerte (≥25)
+      // zona de tendencia fuerte (≥ umbral calibrado)
       ctx.fillStyle = "rgba(255,178,36,0.06)";
-      ctx.fillRect(0, ay(mx), plotW, ay(25) - ay(mx));
+      ctx.fillRect(0, ay(mx), plotW, ay(thr) - ay(mx));
       ctx.strokeStyle = "rgba(95,115,150,0.35)";
       ctx.setLineDash([3, 4]);
       ctx.beginPath();
-      ctx.moveTo(0, ay(25));
-      ctx.lineTo(plotW, ay(25));
+      ctx.moveTo(0, ay(thr));
+      ctx.lineTo(plotW, ay(thr));
       ctx.stroke();
       ctx.setLineDash([]);
       const line = (arr: number[], color: string, w: number) => {
@@ -974,10 +999,10 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       ctx.fillStyle = "#8fa3c4";
       ctx.textAlign = "left";
       ctx.fillText(`ADX ${cfg.adx} · fuerza de tendencia`, 8, subTop + 1);
-      ctx.fillStyle = av >= 25 ? "#ffb224" : "#8fa3c4";
+      ctx.fillStyle = av >= thr ? "#ffb224" : "#8fa3c4";
       ctx.fillText(av.toFixed(1), 196, subTop + 1);
       ctx.fillStyle = "#48597a";
-      ctx.fillText("fuerte ≥ 25", 236, subTop + 1);
+      ctx.fillText(`fuerte ≥ ${thr}`, 236, subTop + 1);
     } else if (osc === "vol") {
       // barras de volumen coloreadas por el signo del delta + línea de delta
       const vols = slice(candles.map((c) => c.v));
@@ -1104,10 +1129,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const k = hover ? state.candles[hover.idx] : null;
   const cons = ind.consensus;
   const tm = TREND_META[cons.dir];
+  // convicción ajustada por la confluencia multi-timeframe
+  const mtf = mtfAdjust(cons, confluence);
   const lastFast = ind.emaFast[ind.emaFast.length - 1];
   const lastSlow = ind.emaSlow[ind.emaSlow.length - 1];
   const lastTrend = ind.emaTrend[ind.emaTrend.length - 1];
-  const lastStUp = ind.stUp[ind.stUp.length - 1];
+  const lastStUp = ind.stUpConf[ind.stUpConf.length - 1];
   const zoomed = visibleCount < CANDLE_COUNT;
 
   return (
@@ -1131,17 +1158,29 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           </p>
         </div>
 
-        {/* insignia de tendencia (consenso de 5 indicadores) */}
-        <span className={`flex items-center gap-2 border px-2.5 py-1.5 ${tm.c}`} title="Consenso: cruce EMA + MACD + RSI + Supertrend + ADX">
+        {/* insignia de tendencia (consenso 5 ind. ajustado por confluencia MTF) */}
+        <span
+          className={`flex items-center gap-2 border px-2.5 py-1.5 ${tm.c}`}
+          title={
+            mtf.total != null
+              ? `Consenso: cruce EMA + MACD + RSI + Supertrend + ADX · Confluencia MTF ${mtf.agree}/${mtf.total}`
+              : "Consenso: cruce EMA + MACD + RSI + Supertrend + ADX"
+          }
+        >
           <TrendIcon dir={cons.dir} />
           <span className="font-mono text-[9.5px] font-bold uppercase tracking-widest">{tm.label}</span>
           <span className="h-1 w-12 overflow-hidden bg-ink-700/80">
             <span
               className="block h-full transition-all duration-700"
-              style={{ width: `${Math.round(cons.strength * 100)}%`, background: tm.bar }}
+              style={{ width: `${Math.round(mtf.strength * 100)}%`, background: tm.bar }}
             />
           </span>
-          <span className="tick-num font-mono text-[9.5px] font-bold">{Math.round(cons.strength * 100)}%</span>
+          <span className="tick-num font-mono text-[9.5px] font-bold">{Math.round(mtf.strength * 100)}%</span>
+          {mtf.total != null && (
+            <span className="border-l border-current/30 pl-2 font-mono text-[8.5px] font-semibold uppercase tracking-wider opacity-80">
+              MTF {mtf.agree}/{mtf.total}
+            </span>
+          )}
         </span>
 
         {/* pantalla completa */}

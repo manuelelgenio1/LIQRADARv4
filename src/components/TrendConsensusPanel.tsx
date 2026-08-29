@@ -1,10 +1,20 @@
 import { useMemo } from "react";
 import type { MarketState } from "../lib/market";
-import { computeIndicators, getIndicatorCfg, type TrendDir } from "../lib/indicators";
+import { CANDLE_COUNT } from "../lib/market";
+import {
+  computeIndicators,
+  getIndicatorCfg,
+  mtfAdjust,
+  adxThrOf,
+  type TrendDir,
+} from "../lib/indicators";
 
 interface Props {
   state: MarketState;
   tfKey: string;
+  calibration?: { stAdj: number; adxThr: number };
+  setCalibration?: (c: { stAdj: number; adxThr: number }) => void;
+  confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
 }
 
 const DIR_META: Record<TrendDir, { label: string; c: string; bar: string; chip: string }> = {
@@ -36,18 +46,45 @@ function DirArrow({ dir }: { dir: TrendDir }) {
   );
 }
 
-export default function TrendConsensusPanel({ state, tfKey }: Props) {
-  const cfg = getIndicatorCfg(tfKey);
+export default function TrendConsensusPanel({ state, tfKey, calibration, setCalibration, confluence }: Props) {
+  const cfg = useMemo(() => {
+    const base = getIndicatorCfg(tfKey);
+    const stAdj = calibration?.stAdj ?? 0;
+    return {
+      ...base,
+      stMult: +(base.stMult * (1 + stAdj)).toFixed(2),
+      adxThr: calibration?.adxThr ?? adxThrOf(base),
+    };
+  }, [tfKey, calibration]);
 
-  const ind = useMemo(
-    () => computeIndicators(state.candles, cfg, state.tfMinutes),
-    [state.candles, cfg, state.tfMinutes]
-  );
+  // semilla extendida: consenso calculado sobre la serie warm cuando existe
+  const ind = useMemo(() => {
+    const src = state.warm && state.warm.length >= CANDLE_COUNT ? state.warm : state.candles;
+    return computeIndicators(src, cfg, state.tfMinutes);
+  }, [state.warm, state.candles, cfg, state.tfMinutes]);
+
   const cons = ind.consensus;
+  const mtf = mtfAdjust(cons, confluence);
   const meta = DIR_META[cons.dir];
   const angle = cons.score * 82;
   const bullishVotes = cons.votes.filter((v) => v.dir === "alcista").length;
   const bearishVotes = cons.votes.filter((v) => v.dir === "bajista").length;
+
+  // ---- lecturas de precisión ----
+  const adxNow = ind.adx[ind.adx.length - 1];
+  const thr = adxThrOf(cfg);
+  const regime = adxNow >= thr ? "TENDENCIA" : "RANGO";
+  // giros de Supertrend confirmados en las últimas 60 velas
+  let flips = 0;
+  for (let i = Math.max(1, ind.stUpConf.length - 60); i < ind.stUpConf.length; i++) {
+    if (ind.stUpConf[i] !== ind.stUpConf[i - 1]) flips++;
+  }
+  const seeded = !!state.warm && state.warm.length >= CANDLE_COUNT;
+  const seedLen = seeded ? (state.warm as { length: number }).length : state.candles.length;
+
+  const stAdj = calibration?.stAdj ?? 0;
+  const adxThr = calibration?.adxThr ?? 25;
+  const isDefault = stAdj === 0 && adxThr === 25;
 
   return (
     <section className="panel panel-corner anim-reveal" style={{ animationDelay: "0.54s" }}>
@@ -108,9 +145,11 @@ export default function TrendConsensusPanel({ state, tfKey }: Props) {
           </div>
           <div className="mt-2.5 flex items-baseline gap-2">
             <span className="tick-num font-display text-lg font-bold text-mist-100">
-              {Math.round(cons.strength * 100)}%
+              {Math.round(mtf.strength * 100)}%
             </span>
-            <span className="font-mono text-[9px] uppercase tracking-widest text-mist-600">convicción</span>
+            <span className="font-mono text-[9px] uppercase tracking-widest text-mist-600">
+              convicción{mtf.total != null ? ` · MTF ${mtf.agree}/${mtf.total}` : ""}
+            </span>
             <span className={`tick-num ml-auto font-mono text-[11px] font-semibold ${meta.c}`}>
               {cons.score >= 0 ? "+" : ""}{cons.score.toFixed(2)}
             </span>
@@ -118,7 +157,7 @@ export default function TrendConsensusPanel({ state, tfKey }: Props) {
           <div className="mt-1.5 h-1.5 overflow-hidden bg-ink-800">
             <div
               className="h-full transition-all duration-700"
-              style={{ width: `${Math.round(cons.strength * 100)}%`, background: meta.bar }}
+              style={{ width: `${Math.round(mtf.strength * 100)}%`, background: meta.bar }}
             />
           </div>
         </div>
@@ -153,10 +192,113 @@ export default function TrendConsensusPanel({ state, tfKey }: Props) {
         })}
       </div>
 
+      {/* ---- franja de precisión ---- */}
+      <div className="grid grid-cols-2 divide-x divide-ink-700/50 border-t border-ink-700/50 bg-ink-900/40 sm:grid-cols-4">
+        <div className="px-3 py-2.5">
+          <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-mist-600">Régimen ADX</div>
+          <div className={`mt-1 font-display text-[13px] font-bold ${adxNow >= thr ? "text-flare-300" : "text-mist-400"}`}>
+            {regime} <span className="tick-num font-mono text-[10px] text-mist-500">{adxNow.toFixed(0)}/{thr}</span>
+          </div>
+        </div>
+        <div className="px-3 py-2.5">
+          <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-mist-600">Giros ST conf.</div>
+          <div className="tick-num mt-1 font-display text-[13px] font-bold text-mist-200">
+            {flips} <span className="font-mono text-[10px] font-medium text-mist-500">/ 60 velas</span>
+          </div>
+        </div>
+        <div className="px-3 py-2.5">
+          <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-mist-600">Semilla ind.</div>
+          <div className={`tick-num mt-1 font-display text-[13px] font-bold ${seeded ? "text-long-300" : "text-mist-400"}`}>
+            {seedLen} <span className="font-mono text-[10px] font-medium text-mist-500">velas</span>
+          </div>
+        </div>
+        <div className="px-3 py-2.5">
+          <div className="font-mono text-[8.5px] uppercase tracking-[0.16em] text-mist-600">Confluencia MTF</div>
+          <div className="mt-1.5 flex items-center gap-1">
+            {(confluence ?? []).map((c) => (
+              <span
+                key={c.tf}
+                title={`${c.tf}: ${c.dir}`}
+                className={`h-2.5 w-2.5 rounded-full border ${
+                  c.dir === "alcista"
+                    ? "border-long-400 bg-long-400/80"
+                    : c.dir === "bajista"
+                      ? "border-short-400 bg-short-400/80"
+                      : "border-mist-500 bg-transparent"
+                }`}
+              />
+            ))}
+            <span className="tick-num ml-1 font-mono text-[10px] font-semibold text-mist-400">
+              {mtf.total != null ? `${mtf.agree}/${mtf.total}` : "—"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ---- calibración fina ---- */}
+      {setCalibration && (
+        <div className="border-t border-ink-700/50 px-4 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-mist-400">
+              Calibración fina
+            </span>
+            <button
+              onClick={() => setCalibration({ stAdj: 0, adxThr: 25 })}
+              disabled={isDefault}
+              className={`border px-2 py-0.5 font-mono text-[8.5px] font-semibold uppercase tracking-wider transition-all ${
+                isDefault
+                  ? "cursor-default border-ink-700 text-mist-600"
+                  : "border-flare-400/40 bg-flare-400/10 text-flare-300 hover:bg-flare-400/20"
+              }`}
+            >
+              Restaurar
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+            <label className="block">
+              <span className="flex justify-between font-mono text-[8.5px] uppercase tracking-wider text-mist-600">
+                <span>Mult. Supertrend</span>
+                <span className="tick-num font-bold text-long-300">{cfg.stMult.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={-0.4}
+                max={0.6}
+                step={0.05}
+                value={stAdj}
+                onChange={(e) => setCalibration({ stAdj: Number(e.target.value), adxThr })}
+                className="mt-1 w-full accent-long-400"
+              />
+              <span className="mt-0.5 block font-mono text-[8px] text-mist-600">
+                ↑ menos giros (más fiable) · ↓ más giros (más sensible)
+              </span>
+            </label>
+            <label className="block">
+              <span className="flex justify-between font-mono text-[8.5px] uppercase tracking-wider text-mist-600">
+                <span>Umbral ADX</span>
+                <span className="tick-num font-bold text-flare-300">{adxThr}</span>
+              </span>
+              <input
+                type="range"
+                min={15}
+                max={35}
+                step={1}
+                value={adxThr}
+                onChange={(e) => setCalibration({ stAdj, adxThr: Number(e.target.value) })}
+                className="mt-1 w-full accent-flare-400"
+              />
+              <span className="mt-0.5 block font-mono text-[8px] text-mist-600">
+                ↑ exige tendencias más fuertes · ↓ acepta más señales
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
+
       <footer className="border-t border-ink-700/50 bg-ink-900/50 px-4 py-2.5">
         <p className="font-mono text-[9px] leading-relaxed text-mist-600">
-          <span className="text-flare-300">◈</span> El ADX actúa como filtro de fuerza: por debajo de 20 el mercado está en
-          rango y las señales direccionales pierden fiabilidad.
+          <span className="text-flare-300">◈</span> Precisión: semilla extendida de {seedLen} velas, giros de Supertrend
+          confirmados y consenso ponderado por la confluencia multi-timeframe. El ADX veta mercados en rango (&lt;{thr}).
         </p>
       </footer>
     </section>

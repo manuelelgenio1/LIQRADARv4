@@ -54,6 +54,10 @@ export interface Toast {
 
 // ---------- persistencia de selecciones ----------
 const LS_KEY = "liqradar:prefs:v1";
+const CAL_KEY = "liqradar:cal:v1";
+
+// velas usadas como semilla de los indicadores (no se dibujan todas)
+const WARMUP_COUNT = 500;
 
 interface Prefs {
   symbol: string;
@@ -117,6 +121,31 @@ export function useMarketEngine() {
 
   // confluencia multi-timeframe (tendencia en 5 TFs del símbolo activo)
   const [confluence, setConfluence] = useState<{ tf: string; dir: TrendDir; strength: number }[] | null>(null);
+
+  // ---- calibración fina de indicadores (persistida) ----
+  // stAdj: ajuste relativo del multiplicador Supertrend (-0.4…+0.6)
+  // adxThr: umbral de régimen ADX (15…35)
+  const [calibration, setCalibration] = useState<{ stAdj: number; adxThr: number }>(() => {
+    const d = { stAdj: 0, adxThr: 25 };
+    try {
+      const raw = localStorage.getItem(CAL_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as { stAdj?: number; adxThr?: number };
+        if (Number.isFinite(p.stAdj)) d.stAdj = Math.max(-0.4, Math.min(0.6, p.stAdj as number));
+        if (Number.isFinite(p.adxThr)) d.adxThr = Math.max(15, Math.min(35, p.adxThr as number));
+      }
+    } catch {
+      /* valores por defecto */
+    }
+    return d;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(CAL_KEY, JSON.stringify(calibration));
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [calibration]);
 
   // ---- sistema de alertas (notificación + sonido) ----
   const [alertsOn, setAlertsOn] = useState<boolean>(() => {
@@ -216,9 +245,13 @@ export function useMarketEngine() {
       const tf = TIMEFRAMES.find((t) => t.key === tfKey)?.minutes ?? 5;
       const seed = hashStr(symbol + tfKey) + 7;
       try {
-        const klines = await fetchKlines(symbol, toBinanceInterval(tfKey), CANDLE_COUNT);
+        // semilla extendida: 500 velas reales para calentar los indicadores;
+        // el gráfico dibuja solo las últimas CANDLE_COUNT.
+        const warmKl = await fetchKlines(symbol, toBinanceInterval(tfKey), WARMUP_COUNT);
         if (cancelled) return;
+        const klines = warmKl.slice(-CANDLE_COUNT);
         let st = marketFromKlines(m, tf, klines, seed);
+        st = { ...st, warm: warmKl };
         try {
           const [depth, fo, ls] = await Promise.allSettled([
             fetchDepth(symbol),
@@ -346,13 +379,13 @@ export function useMarketEngine() {
     const load = async () => {
       if (source === "live") {
         const res = await Promise.allSettled(
-          tfs.map(async (tf) => {
-            const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
-            const kl = await fetchKlines(symbol, toBinanceInterval(tf), CANDLE_COUNT);
-            const ind = computeIndicators(kl, getIndicatorCfg(tf), minutes);
-            return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
-          })
-        );
+        tfs.map(async (tf) => {
+          const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
+          // 300 velas para sembrar bien EMA/ADX antes de leer el consenso
+          const kl = await fetchKlines(symbol, toBinanceInterval(tf), 300);
+          const ind = computeIndicators(kl, getIndicatorCfg(tf), minutes);
+          return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
+        })        );
         if (cancelled) return;
         const items = res
           .filter((r): r is PromiseFulfilledResult<{ tf: string; dir: TrendDir; strength: number }> => r.status === "fulfilled")
@@ -393,8 +426,12 @@ export function useMarketEngine() {
 
     const klineId = window.setInterval(async () => {
       try {
-        const kl = await fetchKlines(symbol, toBinanceInterval(tfKey), CANDLE_COUNT);
-        setState((s) => (s.meta.symbol === symbol ? mergeLiveKlines(s, kl) : s));
+        const kl = await fetchKlines(symbol, toBinanceInterval(tfKey), WARMUP_COUNT);
+        setState((s) =>
+          s.meta.symbol === symbol
+            ? { ...mergeLiveKlines(s, kl.slice(-CANDLE_COUNT)), warm: kl }
+            : s
+        );
       } catch {
         /* el websocket sigue actualizando la última vela */
       }
@@ -547,6 +584,8 @@ export function useMarketEngine() {
     liqSource,
     realCvd,
     confluence,
+    calibration,
+    setCalibration,
     symbols: SYMBOLS,
     timeframes: TIMEFRAMES,
   };

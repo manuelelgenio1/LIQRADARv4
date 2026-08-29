@@ -14,7 +14,12 @@ export interface IndicatorCfg {
   atr: number;             // periodo ATR del Supertrend
   stMult: number;          // multiplicador del Supertrend
   adx: number;             // periodo del ADX
+  adxThr?: number;         // umbral de régimen (defecto 25): ≥ = tendencia, < = rango
 }
+
+// umbral de régimen con valor por defecto
+export const adxThrOf = (cfg: IndicatorCfg): number =>
+  Number.isFinite(cfg.adxThr) ? (cfg.adxThr as number) : 25;
 
 // Calibración por timeframe: cada temporalidad usa periodos que cubren
 // horizontes equivalentes en tiempo real (no en número de velas).
@@ -112,11 +117,11 @@ export function supertrendSeries(
   candles: Candle[],
   period: number,
   mult: number
-): { line: number[]; up: boolean[] } {
+): { line: number[]; up: boolean[]; upConf: boolean[] } {
   const n = candles.length;
   const line = new Array(n).fill(0);
   const up = new Array(n).fill(true);
-  if (!n) return { line, up };
+  if (!n) return { line, up, upConf: up };
   const atr = atrSeries(candles, period);
   let fu = Infinity;
   let fl = -Infinity;
@@ -141,7 +146,17 @@ export function supertrendSeries(
     line[i] = trend === 1 ? fl : fu;
     up[i] = trend === 1;
   }
-  return { line, up };
+  // Giros CONFIRMADOS: un cambio de dirección solo se acepta cuando persiste
+  // (la vela siguiente mantiene el nuevo lado). Elimina los latigazos de 1 vela
+  // que generan señales falsas en mercados laterales.
+  const upConf = up.slice();
+  let conf = up[0];
+  upConf[0] = conf;
+  for (let i = 1; i < n; i++) {
+    if (up[i] === up[i - 1]) conf = up[i]; // persiste → se confirma
+    upConf[i] = conf;
+  }
+  return { line, up, upConf };
 }
 
 // ---------- ADX con +DI / −DI (Wilder) ----------
@@ -249,6 +264,7 @@ function buildConsensus(
     hist: number[];
     rsi: number[];
     stUp: boolean[];
+    stUpConf: boolean[];
     adx: number[];
     pdi: number[];
     mdi: number[];
@@ -298,8 +314,8 @@ function buildConsensus(
     strength: Math.min(1, Math.abs(r - 50) / 30),
   });
 
-  // 4 · Supertrend (dirección pura)
-  const st = last(b.stUp);
+  // 4 · Supertrend (giro CONFIRMADO: requiere persistencia, evita latigazos)
+  const st = last(b.stUpConf);
   votes.push({
     name: "Supertrend",
     note: `ATR ${cfg.atr} × ${cfg.stMult}`,
@@ -308,15 +324,16 @@ function buildConsensus(
     strength: 1,
   });
 
-  // 5 · ADX como filtro de fuerza (veta mercados en rango)
+  // 5 · ADX como filtro de fuerza (veta mercados en rango; umbral calibrable)
   const a = last(b.adx);
-  const strong = a >= 20;
+  const thrA = adxThrOf(cfg);
+  const strong = a >= thrA;
   votes.push({
     name: "ADX",
     note: strong ? `fuerza ${a.toFixed(0)}` : `débil · ${a.toFixed(0)}`,
     weight: 1.4,
     dir: !strong ? "lateral" : last(b.pdi) > last(b.mdi) ? "alcista" : "bajista",
-    strength: strong ? Math.min(1, a / 50) : (20 - a) / 20,
+    strength: strong ? Math.min(1, a / 50) : Math.max(0, (thrA - a) / thrA),
   });
 
   const fin = (x: number, fb = 0): number => (Number.isFinite(x) ? x : fb);
@@ -341,8 +358,9 @@ export interface IndicatorBundle {
   hist: number[];
   rsi: number[];
   atr: number[];
-  st: number[];      // línea Supertrend
-  stUp: boolean[];   // true = tendencia alcista
+  st: number[];       // línea Supertrend
+  stUp: boolean[];    // true = tendencia alcista (crudo)
+  stUpConf: boolean[]; // giro confirmado (requiere persistencia de 1 vela)
   adx: number[];
   pdi: number[];
   mdi: number[];
@@ -372,6 +390,7 @@ export function computeIndicators(
       hist: m.hist,
       rsi,
       stUp: stR.up,
+      stUpConf: stR.upConf,
       adx: adxR.adx,
       pdi: adxR.pdi,
       mdi: adxR.mdi,
@@ -391,10 +410,59 @@ export function computeIndicators(
     atr,
     st: stR.line,
     stUp: stR.up,
+    stUpConf: stR.upConf,
     adx: adxR.adx,
     pdi: adxR.pdi,
     mdi: adxR.mdi,
     trend,
     consensus,
   };
+}
+
+// ---------- precisión: semilla extendida ----------
+// Recorta cada serie del bundle a las últimas `n` velas. Permite calcular los
+// indicadores sobre 500 velas (semilla caliente) y alinear solo las últimas n
+// al gráfico, eliminando el sesgo de arranque de EMA/ADX/ATR/Supertrend.
+export function sliceIndicators(d: IndicatorBundle, n: number): IndicatorBundle {
+  const sN = (a: number[]) => (a.length > n ? a.slice(-n) : a);
+  const sB = (a: boolean[]) => (a.length > n ? a.slice(-n) : a);
+  return {
+    ...d,
+    emaFast: sN(d.emaFast),
+    emaSlow: sN(d.emaSlow),
+    emaTrend: sN(d.emaTrend),
+    macd: sN(d.macd),
+    signal: sN(d.signal),
+    hist: sN(d.hist),
+    rsi: sN(d.rsi),
+    atr: sN(d.atr),
+    st: sN(d.st),
+    stUp: sB(d.stUp),
+    stUpConf: sB(d.stUpConf),
+    adx: sN(d.adx),
+    pdi: sN(d.pdi),
+    mdi: sN(d.mdi),
+  };
+}
+
+// ---------- precisión: ajuste por confluencia multi-timeframe ----------
+// Un consenso alineado con las temporalidades superiores es más fiable;
+// uno en contra recibe un castigo de convicción.
+export interface MtfAdj {
+  strength: number; // convicción ajustada 0..1
+  agree: number | null;   // TFs superiores que coinciden
+  total: number | null;   // TFs evaluados
+}
+export function mtfAdjust(
+  cons: Consensus,
+  confluence: { dir: TrendDir }[] | null | undefined
+): MtfAdj {
+  if (!confluence || !confluence.length || cons.dir === "lateral") {
+    return { strength: cons.strength, agree: null, total: null };
+  }
+  const agree = confluence.filter((c) => c.dir === cons.dir).length;
+  const total = confluence.length;
+  const ratio = agree / total;
+  const strength = Math.max(0, Math.min(1, cons.strength * (0.7 + 0.6 * ratio)));
+  return { strength, agree, total };
 }
