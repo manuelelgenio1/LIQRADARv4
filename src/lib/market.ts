@@ -365,6 +365,35 @@ function deriveState(meta: SymbolMeta, tfMinutes: number, candles: Candle[], see
   };
 }
 
+// Re-ancla el heatmap a una nueva rejilla de precios.
+// El calor se guarda por bin; si pMin/pMax cambian (expansión de rango o
+// nueva ventana), cada bin pasaría a significar otro precio y la nube de
+// liquidaciones se desplazaría respecto a los niveles reales. Esta función
+// re-muestrea el calor interpolando en el espacio de precios para que las
+// zonas sigan ancladas a su precio correcto.
+function rebinHeat(
+  heat: Float32Array,
+  oldMin: number, oldMax: number,
+  newMin: number, newMax: number
+): Float32Array {
+  if (oldMin === newMin && oldMax === newMax) return heat;
+  const oldSpan = oldMax - oldMin || 1;
+  const newSpan = newMax - newMin || 1;
+  const out = new Float32Array(heat.length);
+  for (let c = 0; c < CANDLE_COUNT; c++) {
+    for (let nb = 0; nb < HEAT_BINS; nb++) {
+      const price = newMin + (nb / (HEAT_BINS - 1)) * newSpan;
+      const oldFb = ((price - oldMin) / oldSpan) * (HEAT_BINS - 1);
+      const ob0 = Math.max(0, Math.min(HEAT_BINS - 1, Math.floor(oldFb)));
+      const ob1 = Math.max(0, Math.min(HEAT_BINS - 1, Math.ceil(oldFb)));
+      const frac = Math.max(0, Math.min(1, oldFb - ob0));
+      out[c * HEAT_BINS + nb] =
+        heat[c * HEAT_BINS + ob0] * (1 - frac) + heat[c * HEAT_BINS + ob1] * frac;
+    }
+  }
+  return out;
+}
+
 // ---------- tick en vivo ----------
 let evtSeq = 0;
 
@@ -406,11 +435,13 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean; latencyMs?: 
   if (last.c > pMax - span * 0.05) pMax = last.c + span * 0.06;
 
   // heat: depositar energía cerca del precio actual
-  const heat = new Float32Array(s.heat);
+  let heat: Float32Array = new Float32Array(s.heat);
   if (rolled) {
     heat.copyWithin(0, HEAT_BINS);
     for (let b = 0; b < HEAT_BINS; b++) heat[(CANDLE_COUNT - 1) * HEAT_BINS + b] = 0;
   }
+  // si el rango cambió, re-ancla el calor a la nueva rejilla de precios
+  heat = rebinHeat(heat, s.pMin, s.pMax, pMin, pMax);
   const curBin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((last.c - pMin) / (pMax - pMin)) * (HEAT_BINS - 1))));
   const ci = CANDLE_COUNT - 1;
   for (let db = -3; db <= 3; db++) {
@@ -423,6 +454,12 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean; latencyMs?: 
   let heatMax = 0;
   for (let i = 0; i < heat.length; i++) if (heat[i] > heatMax) heatMax = heat[i];
   if (heatMax <= 0) heatMax = s.heatMax || 1;
+
+  // cuando nace una vela nueva, re-deriva los clústeres para que las zonas de
+  // liquidación sigan al calor y al precio actuales (en live lo hace el merge)
+  const clusters = rolled
+    ? deriveClusters(meta, candles, heat, heatMax, pMin, pMax, rand)
+    : s.clusters;
 
   // CVD
   const cvd = s.cvd.slice();
@@ -487,6 +524,7 @@ export function tickMarket(s: MarketState, opts: { drift?: boolean; latencyMs?: 
   return {
     ...s,
     candles,
+    clusters,
     heat,
     heatMax,
     pMin,
@@ -576,6 +614,8 @@ export function applyLiveTick(s: MarketState, price: number, tfMinutes: number):
   const span = pMax - pMin || 1;
   if (price < pMin + span * 0.05) pMin = price - span * 0.06;
   if (price > pMax - span * 0.05) pMax = price + span * 0.06;
+  // re-ancla el calor si el rango de precios se expandió
+  heat = rebinHeat(heat, s.pMin, s.pMax, pMin, pMax);
 
   return {
     ...s,
@@ -614,11 +654,17 @@ export function mergeLiveKlines(s: MarketState, klines: Candle[]): MarketState {
   let lo = Infinity, hi = -Infinity;
   for (const k of candles) { lo = Math.min(lo, k.l); hi = Math.max(hi, k.h); }
   const pad = (hi - lo) * 0.045;
+  // re-ancla el calor a la nueva rejilla de precios antes de derivar clústeres,
+  // para que las zonas y el radar coincidan con los niveles reales
+  heat = rebinHeat(heat, s.pMin, s.pMax, lo - pad, hi + pad);
+  let heatMax = 0;
+  for (let i = 0; i < heat.length; i++) if (heat[i] > heatMax) heatMax = heat[i];
+  if (heatMax <= 0) heatMax = s.heatMax || 1;
   // re-deriva los clústeres sobre la ventana actualizada para que el radar,
   // la lista de zonas y el market-maker path no queden obsoletos
   const clusters = deriveClusters(
-    s.meta, candles, heat, s.heatMax, lo - pad, hi + pad,
+    s.meta, candles, heat, heatMax, lo - pad, hi + pad,
     mulberry32((Date.now() ^ 0x5f356495) >>> 0)
   );
-  return { ...s, candles, heat, cvd, clusters, pMin: lo - pad, pMax: hi + pad };
+  return { ...s, candles, heat, heatMax, cvd, clusters, pMin: lo - pad, pMax: hi + pad };
 }
