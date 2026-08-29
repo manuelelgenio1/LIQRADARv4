@@ -24,7 +24,7 @@ interface Props {
   confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
 }
 
-const H = 488;
+const H = 540;
 const SCALE_W = 86;
 const SUB_H = 96;
 const TIME_H = 22;
@@ -275,6 +275,112 @@ function ToolDivider() {
   return <span className="h-8 w-px shrink-0 self-center bg-ink-700/60" />;
 }
 
+// colores de punto para cada capa (en el menú desplegable)
+const LAYER_DOT: Record<LayerId, string> = {
+  clusters: "bg-short-400",
+  lev: "bg-flare-400",
+  sessions: "bg-long-400",
+  ema: "bg-long-300",
+  st: "bg-long-400",
+  cvdOv: "bg-flare-300",
+  voids: "bg-flare-300",
+};
+
+// menú desplegable de capas: agrupa los 7 overlays en un solo control compacto
+function LayersMenu({
+  layers,
+  onToggle,
+  open,
+  setOpen,
+}: {
+  layers: Layers;
+  onToggle: (id: LayerId) => void;
+  open: boolean;
+  setOpen: (v: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open, setOpen]);
+
+  const ids = Object.keys(layers) as LayerId[];
+  const activeCount = ids.filter((k) => layers[k]).length;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest transition-all ${
+          open
+            ? "border-long-500/50 bg-long-900/40 text-long-300"
+            : "border-ink-700 bg-ink-850/80 text-mist-400 hover:border-ink-600 hover:text-mist-200"
+        }`}
+        title="Mostrar u ocultar las capas del gráfico"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+        Capas
+        <span className={`tick-num ${activeCount === ids.length ? "text-long-300" : "text-flare-300"}`}>
+          {activeCount}/{ids.length}
+        </span>
+        <svg
+          width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+          className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        >
+          <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="anim-feed-in absolute right-0 top-full z-40 mt-2 w-56 border border-ink-600 bg-ink-900/98 py-1 shadow-2xl backdrop-blur-md">
+          <div className="px-3 py-1.5 font-mono text-[8px] font-bold uppercase tracking-[0.2em] text-mist-600">
+            Capas del gráfico
+          </div>
+          {LAYER_META.map((l) => (
+            <button
+              key={l.id}
+              onClick={() => onToggle(l.id)}
+              className="group flex w-full items-center gap-2.5 px-3 py-[7px] text-left transition-colors hover:bg-ink-750/70"
+              title={l.tip}
+            >
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full transition-all ${
+                  layers[l.id] ? LAYER_DOT[l.id] : "bg-ink-600"
+                }`}
+              />
+              <span
+                className={`flex-1 font-mono text-[10.5px] font-medium transition-colors ${
+                  layers[l.id] ? "text-mist-200" : "text-mist-600"
+                }`}
+              >
+                {l.label}
+              </span>
+              <span
+                className={`relative h-[14px] w-[26px] rounded-full transition-colors ${
+                  layers[l.id] ? "bg-long-500/60" : "bg-ink-700"
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] h-[10px] w-[10px] rounded-full bg-mist-100 transition-all ${
+                    layers[l.id] ? "left-[14px]" : "left-[2px]"
+                  }`}
+                />
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
 export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd, calibration, confluence }: Props) {
@@ -286,6 +392,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const [visibleCount, setVisibleCount] = useState(() => loadZoom(tfKey));
   const [levOn, setLevOn] = useState<Record<number, boolean>>(loadLevOn);
   const [fullscreen, setFullscreen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
   const [chartH, setChartH] = useState(H);
   const offRef = useRef<HTMLCanvasElement | null>(null);
   const [logScale, setLogScale] = useState<boolean>(() => {
@@ -1131,9 +1238,6 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const tm = TREND_META[cons.dir];
   // convicción ajustada por la confluencia multi-timeframe
   const mtf = mtfAdjust(cons, confluence);
-  const lastFast = ind.emaFast[ind.emaFast.length - 1];
-  const lastSlow = ind.emaSlow[ind.emaSlow.length - 1];
-  const lastTrend = ind.emaTrend[ind.emaTrend.length - 1];
   const lastStUp = ind.stUpConf[ind.stUpConf.length - 1];
   const zoomed = visibleCount < CANDLE_COUNT;
 
@@ -1146,16 +1250,26 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       }
       style={fullscreen ? undefined : { animationDelay: "0.05s" }}
     >
-      {/* cabecera: identidad + tendencia + pantalla completa */}
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/50 px-4 py-2.5">
-        <div className="leading-none">
-          <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
-            Heatmap de liquidaciones
-            {fullscreen && <span className="ml-2 text-long-400">· pantalla completa</span>}
-          </h2>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            {state.meta.symbol} · perp · energía de liquidación por nivel
-          </p>
+      {/* cabecera: identidad + tendencia + acciones */}
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2.5 border-b border-ink-700/50 px-5 py-3.5">
+        <div className="flex items-center gap-3 leading-none">
+          <span className="flex h-9 w-9 items-center justify-center border border-long-500/30 bg-long-900/30">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <rect x="3" y="13" width="3.4" height="8" fill="#2de0c0" opacity="0.5" />
+              <rect x="8.2" y="8" width="3.4" height="13" fill="#2de0c0" opacity="0.8" />
+              <rect x="13.4" y="10" width="3.4" height="11" fill="#ff5d7e" opacity="0.7" />
+              <rect x="18.6" y="4" width="3.4" height="17" fill="#ff5d7e" />
+            </svg>
+          </span>
+          <div>
+            <h2 className="font-display text-[15px] font-bold uppercase tracking-[0.14em] text-mist-100">
+              Heatmap de liquidaciones
+              {fullscreen && <span className="ml-2 text-[11px] font-semibold text-long-400">· pantalla completa</span>}
+            </h2>
+            <p className="mt-1 font-mono text-[9.5px] uppercase tracking-[0.22em] text-mist-500">
+              <span className="text-mist-300">{state.meta.symbol}</span> · perp · energía de liquidación por nivel
+            </p>
+          </div>
         </div>
 
         {/* insignia de tendencia (consenso 5 ind. ajustado por confluencia MTF) */}
@@ -1183,31 +1297,46 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           )}
         </span>
 
-        {/* pantalla completa */}
-        <button
-          onClick={() => setFullscreen((f) => !f)}
-          className={`ml-auto flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest transition-all ${
-            fullscreen
-              ? "border-short-500/50 bg-short-900/50 text-short-300 hover:bg-short-900/80"
-              : "border-long-500/40 bg-long-900/30 text-long-300 hover:bg-long-900/60"
-          }`}
-          title={fullscreen ? "Salir de pantalla completa (ESC)" : "Ver en pantalla completa"}
-        >
-          {fullscreen ? (
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
-              <path d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" strokeLinecap="round" strokeLinejoin="round" />
+        {/* acciones: capas (menú) · exportar PNG · pantalla completa */}
+        <div className="ml-auto flex items-center gap-2">
+          <LayersMenu layers={layers} onToggle={(id) => setLayers((p) => ({ ...p, [id]: !p[id] }))} open={layersOpen} setOpen={setLayersOpen} />
+
+          <button
+            onClick={exportPng}
+            className="flex items-center gap-1.5 border border-ink-700 bg-ink-850/80 px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest text-mist-400 transition-all hover:border-long-500/40 hover:text-long-300"
+            title="Descargar el gráfico como imagen PNG"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
             </svg>
-          ) : (
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
-              <path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          )}
-          {fullscreen ? "Salir" : "Ampliar"}
-        </button>
+            PNG
+          </button>
+
+          <button
+            onClick={() => setFullscreen((f) => !f)}
+            className={`flex items-center gap-1.5 border px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest transition-all ${
+              fullscreen
+                ? "border-short-500/50 bg-short-900/50 text-short-300 hover:bg-short-900/80"
+                : "border-long-500/40 bg-long-900/30 text-long-300 hover:bg-long-900/60"
+            }`}
+            title={fullscreen ? "Salir de pantalla completa (ESC)" : "Ver en pantalla completa"}
+          >
+            {fullscreen ? (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                <path d="M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                <path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+            {fullscreen ? "Salir" : "Ampliar"}
+          </button>
+        </div>
       </header>
 
       {/* barra de herramientas: controles agrupados por función */}
-      <div className="scroll-slim flex items-center gap-x-3 gap-y-2 overflow-x-auto border-b border-ink-700/50 bg-ink-900/60 px-4 py-2">
+      <div className="scroll-slim flex items-center gap-x-4 gap-y-2 overflow-x-auto border-b border-ink-700/50 bg-ink-900/60 px-5 py-2.5">
         <ToolGroup label="Temporalidad">
           {timeframes.map((t) => (
             <button
@@ -1304,39 +1433,6 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             </button>
           ))}
         </ToolGroup>
-
-        <ToolDivider />
-
-        <ToolGroup label="Capas" title="Overlays conmutables sobre el gráfico">
-          {LAYER_META.map((lm) => (
-            <button
-              key={lm.id}
-              onClick={() => setLayers((p) => ({ ...p, [lm.id]: !p[lm.id] }))}
-              className={`px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-wide transition-all duration-150 ${
-                layers[lm.id]
-                  ? `${lm.on} shadow-[inset_0_-2px_0_currentColor]`
-                  : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
-              }`}
-              title={lm.tip}
-            >
-              {lm.label}
-            </button>
-          ))}
-        </ToolGroup>
-
-        <ToolDivider />
-
-        {/* exportar el gráfico como PNG */}
-        <button
-          onClick={exportPng}
-          className="flex items-center gap-1.5 self-center border border-ink-700 bg-ink-850/80 px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest text-mist-400 transition-all hover:border-long-500/40 hover:text-long-300"
-          title="Descargar el gráfico como imagen PNG"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-          </svg>
-          PNG
-        </button>
       </div>
 
       <div ref={wrapRef} className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>
@@ -1352,54 +1448,31 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           </div>
         )}
 
-        {/* leyenda flotante: indicadores sobre el gráfico + clave de colores */}
-        <div className="pointer-events-none absolute left-2 top-2 z-10 flex flex-col items-start gap-1">
-          {(layers.ema || layers.st || layers.cvdOv) && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1.5 font-mono text-[9px] text-mist-500 backdrop-blur-[2px]">
-              {layers.ema && (
-                <>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-[2px] w-3.5 bg-long-300" /> EMA {cfg.fast}
-                    <b className="tick-num text-mist-200">{fmtPrice(lastFast, state.meta.decimals)}</b>
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-[2px] w-3.5 bg-flare-400" /> EMA {cfg.slow}
-                    <b className="tick-num text-mist-200">{fmtPrice(lastSlow, state.meta.decimals)}</b>
-                  </span>
-                  <span className="hidden items-center gap-1.5 sm:flex">
-                    <span className="h-0 w-3.5 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
-                    <b className="tick-num text-mist-200">{fmtPrice(lastTrend, state.meta.decimals)}</b>
-                  </span>
-                </>
-              )}
-              {layers.st && (
-                <span className="flex items-center gap-1.5">
-                  <span className={`h-[2px] w-3.5 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
-                  ST {cfg.atr}×{cfg.stMult}
-                  <b className={lastStUp ? "text-long-300" : "text-short-300"}>{lastStUp ? "▲" : "▼"}</b>
-                </span>
-              )}
-              {layers.cvdOv && (
-                <span className="flex items-center gap-1.5">
-                  <span className="h-0 w-3.5 border-t border-dashed border-flare-300" /> CVD
-                </span>
-              )}
-            </div>
-          )}
-          <div className="flex items-center gap-2.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1 font-mono text-[8px] uppercase tracking-wider text-mist-500 backdrop-blur-[2px]">
-            <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 bg-long-400/90" /> liq. longs ↓
+        {/* leyenda flotante: una sola lámina sutil con la clave de colores */}
+        <div className="pointer-events-none absolute left-2.5 top-2.5 z-10">
+          <div className="flex items-center gap-3 border border-ink-700/45 bg-ink-950/50 px-3 py-1.5 font-mono text-[8px] uppercase tracking-[0.14em] text-mist-500 backdrop-blur-[3px]">
+            <span className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-long-400" /> longs
             </span>
-            <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 bg-short-400/90" /> liq. shorts ↑
+            <span className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-short-400" /> shorts
             </span>
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-1.5">
               <span
-                className="h-1.5 w-6"
-                style={{ background: "linear-gradient(90deg, rgba(45,224,192,0.1), #ffd37a, #fff)" }}
+                className="h-[3px] w-7 rounded-full"
+                style={{ background: "linear-gradient(90deg, rgba(45,224,192,0.15), #ffd37a, #fff)" }}
               />
-              intensidad
+              energía
             </span>
+            {layers.st && (
+              <span
+                className={`flex items-center gap-1 border-l border-ink-700/60 pl-3 font-bold ${
+                  lastStUp ? "text-long-300" : "text-short-300"
+                }`}
+              >
+                ST {lastStUp ? "▲" : "▼"}
+              </span>
+            )}
           </div>
         </div>
 
@@ -1445,45 +1518,51 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         )}
       </div>
 
-      {/* barra de estado: métricas clave en una línea compacta */}
-      <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-ink-700/50 bg-ink-900/70 px-4 py-2 font-mono text-[9.5px] text-mist-600">
-        <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-long-400" />
-          Liq 24h L <b className="tick-num text-long-300">{fmtUsd(state.totalLiq24hLong)}</b>
+      {/* barra de estado: métricas clave con jerarquía clara */}
+      <footer className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-ink-700/50 bg-ink-900/70 px-5 py-2.5 font-mono text-[9px] uppercase tracking-wider text-mist-600">
+        <span className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-long-400" />
+            Liq 24h L
+          </span>
+          <b className="tick-num text-[11px] font-bold tracking-normal text-long-300">{fmtUsd(state.totalLiq24hLong)}</b>
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-short-400" />
-          Liq 24h S <b className="tick-num text-short-300">{fmtUsd(state.totalLiq24hShort)}</b>
+        <span className="h-3.5 w-px bg-ink-700" />
+        <span className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-short-400" />
+            Liq 24h S
+          </span>
+          <b className="tick-num text-[11px] font-bold tracking-normal text-short-300">{fmtUsd(state.totalLiq24hShort)}</b>
         </span>
+        <span className="h-3.5 w-px bg-ink-700" />
         <span>
-          OI <b className="tick-num text-mist-200">{fmtUsd(state.oi, 2)}</b>{" "}
+          OI <b className="tick-num tracking-normal text-mist-200">{fmtUsd(state.oi, 2)}</b>{" "}
           <span className={state.oiDelta1h >= 0 ? "text-long-300" : "text-short-300"}>
             {fmtPct(state.oiDelta1h, 2)} 1h
           </span>
         </span>
+        <span className="h-3.5 w-px bg-ink-700" />
         <span>
           Funding{" "}
-          <b className={`tick-num ${state.funding >= 0 ? "text-long-300" : "text-short-300"}`}>
+          <b className={`tick-num tracking-normal ${state.funding >= 0 ? "text-long-300" : "text-short-300"}`}>
             {fmtPct(state.funding, 4)}
           </b>
         </span>
+        <span className="h-3.5 w-px bg-ink-700" />
         <span>
           CVD{" "}
-          <b className={`tick-num ${state.cvd[state.cvd.length - 1] >= 0 ? "text-long-300" : "text-short-300"}`}>
+          <b className={`tick-num tracking-normal ${state.cvd[state.cvd.length - 1] >= 0 ? "text-long-300" : "text-short-300"}`}>
             {fmtCompact(state.cvd[state.cvd.length - 1])}
           </b>
         </span>
-        <span>
-          Clústeres <b className="tick-num text-flare-300">{state.clusters.length}</b>
-        </span>
-        <span className="ml-auto hidden items-center gap-2 uppercase tracking-wider md:flex">
-          <span>{tfKey}</span>
-          <span className="text-ink-600">·</span>
-          <span>{logScale ? "log" : "lin"}</span>
-          <span className="text-ink-600">·</span>
-          <span className={zoomed ? "text-flare-300" : ""}>×{(CANDLE_COUNT / visibleCount).toFixed(1)}</span>
-          <span className="text-ink-600">·</span>
-          <span>rueda = zoom · doble clic = reset</span>
+        <span className="ml-auto hidden items-center gap-2 md:flex">
+          <span className="border border-ink-700 bg-ink-850 px-1.5 py-0.5 text-mist-400">{tfKey}</span>
+          <span className="border border-ink-700 bg-ink-850 px-1.5 py-0.5 text-mist-400">{logScale ? "LOG" : "LIN"}</span>
+          <span className={`border px-1.5 py-0.5 ${zoomed ? "border-flare-400/40 text-flare-300" : "border-ink-700 bg-ink-850 text-mist-400"}`}>
+            ×{(CANDLE_COUNT / visibleCount).toFixed(1)}
+          </span>
+          <span className="text-mist-600">rueda = zoom · doble clic = reset</span>
         </span>
       </footer>
     </section>
