@@ -11,6 +11,7 @@ interface Props {
   tfKey: string;
   setTfKey: (k: string) => void;
   timeframes: { key: string; minutes: number }[];
+  realCvd?: boolean;
 }
 
 const H = 488;
@@ -127,7 +128,7 @@ const CAN_FILTER = (() => {
 
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
-export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Props) {
+export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(900);
@@ -565,9 +566,13 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
       ctx.stroke();
       ctx.fillStyle = "#8fa3c4";
       ctx.textAlign = "left";
-      ctx.fillText("CVD · delta acumulado", 8, subTop + 1);
+      ctx.fillText(realCvd ? "CVD · delta real (aggTrade)" : "CVD · delta acumulado", 8, subTop + 1);
+      if (realCvd) {
+        ctx.fillStyle = "#14c4a6";
+        ctx.fillRect(8 + ctx.measureText("CVD · delta real (aggTrade)").width + 6, subTop - 6, 5, 5);
+      }
       ctx.fillStyle = cvdUp ? "#2de0c0" : "#ff5d7e";
-      ctx.fillText(fmtCompact(cv[cv.length - 1]), 146, subTop + 1);
+      ctx.fillText(fmtCompact(cv[cv.length - 1]), realCvd ? 216 : 146, subTop + 1);
     } else if (osc === "macd") {
       const hs = slice(ind.hist), ms = slice(ind.macd), ss = slice(ind.signal);
       let mMax = 1e-9;
@@ -704,7 +709,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes }: Pro
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn]);
+  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();

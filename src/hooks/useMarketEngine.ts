@@ -9,21 +9,33 @@ import {
   SYMBOLS,
   TIMEFRAMES,
   CANDLE_COUNT,
+  applyTradeFlow,
+  injectLiqEvents,
   type MarketState,
   type SymbolMeta,
+  type LiquidationEvent,
 } from "../lib/market";
 import {
   connectTickers,
+  connectTrades,
+  connectLiquidations,
   fetchKlines,
   fetchDepth,
   fetchFundingOi,
   fetchLongShortRatio,
+  fetchContractValue,
   toBinanceInterval,
   depthToState,
   type TickerInfo,
   type LongShortRatio,
+  type RawLiq,
 } from "../lib/live";
-import { getIndicatorCfg, supertrendSeries } from "../lib/indicators";
+import {
+  computeIndicators,
+  getIndicatorCfg,
+  supertrendSeries,
+  type TrendDir,
+} from "../lib/indicators";
 import {
   syncPools,
   computeStats,
@@ -93,6 +105,17 @@ export function useMarketEngine() {
 
   // sentimiento real (ratio long/short de cuentas y top traders)
   const [sentiment, setSentiment] = useState<LongShortRatio | null>(null);
+
+  // ---- datos 100% reales: trades (CVD) + liquidaciones OKX ----
+  const [liqSource, setLiqSource] = useState<"okx" | "sim">("sim");
+  const [realCvd, setRealCvd] = useState(false);
+  const tradeDeltaRef = useRef(0);
+  const realCvdRef = useRef(false);
+  const liqBufferRef = useRef<RawLiq[]>([]);
+  const liqSeqRef = useRef(0);
+
+  // confluencia multi-timeframe (tendencia en 5 TFs del símbolo activo)
+  const [confluence, setConfluence] = useState<{ tf: string; dir: TrendDir; strength: number }[] | null>(null);
 
   // ---- sistema de alertas (notificación + sonido) ----
   const [alertsOn, setAlertsOn] = useState<boolean>(() => {
@@ -254,18 +277,90 @@ export function useMarketEngine() {
   useEffect(() => {
     if (paused || source === "connecting") return;
     const live = source === "live";
-    const id = window.setInterval(
-      () =>
-        setState((s) =>
-          tickMarket(s, {
-            drift: !live,
-            latencyMs: live && wsLatencyRef.current != null ? wsLatencyRef.current : undefined,
-          })
-        ),
-      live ? 750 : 700
-    );
+    const id = window.setInterval(() => {
+      const d = tradeDeltaRef.current;
+      tradeDeltaRef.current = 0;
+      setState((s) => {
+        let n = s;
+        if (d !== 0 && n.meta.symbol === symbol) n = applyTradeFlow(n, d);
+        return tickMarket(n, {
+          drift: !live,
+          latencyMs: live && wsLatencyRef.current != null ? wsLatencyRef.current : undefined,
+        });
+      });
+    }, live ? 750 : 700);
     return () => window.clearInterval(id);
-  }, [paused, source]);
+  }, [paused, source, symbol]);
+
+  // ---- CVD REAL: stream aggTrade del símbolo activo (solo en vivo) ----
+  useEffect(() => {
+    if (source !== "live") return;
+    return connectTrades(symbol, (d) => {
+      if (!pausedRef.current) tradeDeltaRef.current += d;
+      if (!realCvdRef.current) {
+        realCvdRef.current = true;
+        setRealCvd(true);
+      }
+    });
+  }, [source, symbol]);
+
+  // ---- LIQUIDACIONES REALES: WebSocket público de OKX (todos los símbolos) ----
+  useEffect(() => {
+    let cancelled = false;
+    let close: (() => void) | null = null;
+    (async () => {
+      const ct: Record<string, number> = {};
+      await Promise.all(
+        SYMBOLS.map(async (s) => {
+          try {
+            ct[s.base] = await fetchContractValue(`${s.base}-USDT-SWAP`, s.base);
+          } catch {
+            ct[s.base] = 1;
+          }
+        })
+      );
+      if (cancelled) return;
+      close = connectLiquidations(
+        SYMBOLS.map((s) => s.base),
+        ct,
+        (e) => {
+          liqBufferRef.current.push(e);
+        }
+      );
+    })();
+    return () => {
+      cancelled = true;
+      close?.();
+    };
+  }, []);
+
+  // ---- CONFLUENCIA MULTI-TF: tendencia en 5 temporalidades del símbolo ----
+  useEffect(() => {
+    if (source !== "live") return;
+    let cancelled = false;
+    const tfs = ["5m", "15m", "1H", "4H", "1D"];
+    const load = async () => {
+      const res = await Promise.allSettled(
+        tfs.map(async (tf) => {
+          const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
+          const kl = await fetchKlines(symbol, toBinanceInterval(tf), CANDLE_COUNT);
+          const ind = computeIndicators(kl, getIndicatorCfg(tf), minutes);
+          return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
+        })
+      );
+      if (cancelled) return;
+      const items = res
+        .filter((r): r is PromiseFulfilledResult<{ tf: string; dir: TrendDir; strength: number }> => r.status === "fulfilled")
+        .map((r) => r.value);
+      if (items.length) setConfluence(items);
+    };
+    load();
+    const id = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [source, symbol]);
 
   // refrescos en vivo: libro (1.5s), klines (20s), funding/OI (45s)
   useEffect(() => {
@@ -354,6 +449,29 @@ export function useMarketEngine() {
     const id = window.setInterval(() => {
       const s = stateRef.current;
       if (!s) return;
+
+      // inyectar liquidaciones REALES de OKX acumuladas en el buffer
+      const buf = liqBufferRef.current;
+      liqBufferRef.current = [];
+      if (buf.length) {
+        const sym = s.meta.symbol;
+        const mapped: LiquidationEvent[] = buf
+          .filter((e) => `${e.base}USDT` === sym)
+          .map((e) => ({
+            id: `okx-${++liqSeqRef.current}`,
+            time: e.ts,
+            symbol: sym,
+            side: e.side,
+            price: e.px,
+            qtyUsd: e.usd,
+            exchange: "OKX",
+          }));
+        if (mapped.length) {
+          setLiqSource("okx");
+          setState((st) => (st.meta.symbol === sym ? injectLiqEvents(st, mapped) : st));
+        }
+      }
+
       const price = s.candles[s.candles.length - 1].c;
       const log = syncPools(s.meta.symbol, s.clusters, price, Date.now());
       setPoolLog(log);
@@ -407,6 +525,9 @@ export function useMarketEngine() {
     sentiment,
     alertsOn,
     toggleAlerts,
+    liqSource,
+    realCvd,
+    confluence,
     symbols: SYMBOLS,
     timeframes: TIMEFRAMES,
   };

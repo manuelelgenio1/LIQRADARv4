@@ -569,15 +569,15 @@ export function marketFromKlines(meta: SymbolMeta, tfMinutes: number, klines: Ca
 }
 
 // Aplica un tick real del websocket: rollover de vela cuando cruza el
-// intervalo del timeframe, delta del CVD según la dirección real del
-// precio y ajuste del rango visible.
+// intervalo del timeframe y ajuste del rango visible. El delta/volumen del
+// CVD ya no se estima aquí: proviene del stream aggTrade (applyTradeFlow),
+// así que en vivo el CVD es 100% dato real y no se suma dos veces.
 export function applyLiveTick(s: MarketState, price: number, tfMinutes: number): MarketState {
   if (!Number.isFinite(price) || price <= 0) return s;
   const now = Date.now();
   const stepMs = tfMinutes * 60_000;
   const candles = s.candles.slice();
   const last = { ...candles[candles.length - 1] };
-  const prevC = last.c;
   let rolled = false;
   if (now - last.t >= stepMs) {
     rolled = true;
@@ -590,10 +590,6 @@ export function applyLiveTick(s: MarketState, price: number, tfMinutes: number):
     last.c = price;
     last.h = Math.max(last.h, price);
     last.l = Math.min(last.l, price);
-    const dc = price - prevC;
-    const mag = (Math.abs(dc) / price) * s.meta.bookBase * 240 + s.meta.bookBase * 0.02;
-    last.delta += dc >= 0 ? mag : -mag;
-    last.v += mag * 2.2;
     candles[candles.length - 1] = last;
   }
 
@@ -667,4 +663,30 @@ export function mergeLiveKlines(s: MarketState, klines: Candle[]): MarketState {
     mulberry32((Date.now() ^ 0x5f356495) >>> 0)
   );
   return { ...s, candles, heat, heatMax, cvd, clusters, pMin: lo - pad, pMax: hi + pad };
+}
+
+// Incorpora flujo REAL de trades (delta comprador/vendedor en USD) a la vela actual
+export function applyTradeFlow(s: MarketState, deltaUsd: number): MarketState {
+  if (!Number.isFinite(deltaUsd) || deltaUsd === 0) return s;
+  const candles = s.candles.slice();
+  const last = { ...candles[candles.length - 1] };
+  last.delta += deltaUsd;
+  last.v += Math.abs(deltaUsd);
+  candles[candles.length - 1] = last;
+  const cvd = s.cvd.slice();
+  cvd[cvd.length - 1] = cvd[cvd.length - 2] + last.delta;
+  return { ...s, candles, cvd };
+}
+
+// Inyecta liquidaciones REALES (OKX) al inicio del feed y acumula los totales 24h
+export function injectLiqEvents(s: MarketState, evts: LiquidationEvent[]): MarketState {
+  if (!evts.length) return s;
+  const events = [...evts, ...s.events].slice(0, 44);
+  let totalLiq24hLong = s.totalLiq24hLong;
+  let totalLiq24hShort = s.totalLiq24hShort;
+  for (const e of evts) {
+    if (e.side === "long") totalLiq24hLong += e.qtyUsd;
+    else totalLiq24hShort += e.qtyUsd;
+  }
+  return { ...s, events, totalLiq24hLong, totalLiq24hShort };
 }

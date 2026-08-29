@@ -11,6 +11,7 @@ import MarketMakerPanel from "./components/MarketMakerPanel";
 import LiquidationFeed from "./components/LiquidationFeed";
 import TrendConsensusPanel from "./components/TrendConsensusPanel";
 import ValidationLab from "./components/ValidationLab";
+import ConfluenceStrip from "./components/ConfluenceStrip";
 
 // ---------- ErrorBoundary: nunca más una pantalla en blanco ----------
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
@@ -77,6 +78,9 @@ function Dashboard() {
       <TickerTape livePrices={engine.livePrices} paused={engine.paused} />
 
       <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 lg:px-6 lg:py-5">
+        {/* franja de confluencia multi-timeframe */}
+        <ConfluenceStrip confluence={engine.confluence} symbol={engine.symbol} />
+
         {/* fila 1: heatmap + radar */}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
           <div className="xl:col-span-8">
@@ -85,6 +89,7 @@ function Dashboard() {
               tfKey={engine.tfKey}
               setTfKey={engine.setTfKey}
               timeframes={engine.timeframes}
+              realCvd={engine.realCvd}
             />
           </div>
           <div className="xl:col-span-4">
@@ -109,7 +114,7 @@ function Dashboard() {
         {/* fila 3: feed + consenso + market maker path */}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
           <div className="xl:col-span-7">
-            <LiquidationFeed state={state} paused={engine.paused} />
+            <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
           </div>
           <div className="space-y-4 xl:col-span-5">
             <TrendConsensusPanel state={state} tfKey={engine.tfKey} />
@@ -131,7 +136,9 @@ function Dashboard() {
           </span>
           <span>
             {engine.source === "live"
-              ? "datos en vivo · binance (ws + rest) · liquidaciones estimadas · validadas por el laboratorio"
+              ? engine.liqSource === "okx"
+                ? "datos en vivo · binance (ws + rest) · liquidaciones reales OKX · CVD real (aggTrade)"
+                : "datos en vivo · binance (ws + rest) · liquidaciones estimadas · validadas por el laboratorio"
               : engine.source === "sim"
                 ? "modo simulado — sin conexión con binance · fines educativos"
                 : "conectando con el mercado…"}

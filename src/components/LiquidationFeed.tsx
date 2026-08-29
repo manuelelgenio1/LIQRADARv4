@@ -1,11 +1,13 @@
 import type { MarketState } from "../lib/market";
 import { fmtClock, fmtPrice, fmtUsd } from "../lib/format";
 
-interface Props { state: MarketState; paused: boolean; }
+interface Props { state: MarketState; paused: boolean; liqSource?: "okx" | "sim"; }
 
-export default function LiquidationFeed({ state, paused }: Props) {
+export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Props) {
   const { events, meta } = state;
   const sessionTotal = events.reduce((s, e) => s + e.qtyUsd, 0);
+  const realCount = events.filter((e) => e.exchange === "OKX").length;
+  const isReal = liqSource === "okx";
 
   return (
     <section className="panel anim-reveal flex h-full flex-col" style={{ animationDelay: "0.48s" }}>
@@ -15,9 +17,18 @@ export default function LiquidationFeed({ state, paused }: Props) {
           style={{ animation: paused ? "none" : "liveBlink 1.3s ease-out infinite" }}
         />
         <div className="leading-none">
-          <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Liquidaciones en vivo</h2>
+          <h2 className="flex items-center gap-2 font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
+            Liquidaciones {isReal ? "reales" : "en vivo"}
+            {isReal && (
+              <span className="flex items-center gap-1 border border-long-500/50 bg-long-900/40 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-widest text-long-300">
+                <span className="h-1 w-1 animate-pulse rounded-full bg-long-400" />
+                OKX en vivo
+              </span>
+            )}
+          </h2>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            {events.length} eventos en sesión · {fmtUsd(sessionTotal)} · estimadas por modelo
+            {events.length} eventos · {fmtUsd(sessionTotal)} ·{" "}
+            {isReal ? `${realCount} reales (OKX) + modelo` : "estimadas por modelo"}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-3 font-mono text-[9px] uppercase tracking-widest text-mist-600">
@@ -59,8 +70,9 @@ export default function LiquidationFeed({ state, paused }: Props) {
               <span className={`tick-num ml-auto shrink-0 font-mono text-[11px] font-bold ${big ? "text-flare-300" : "text-mist-200"}`}>
                 {fmtUsd(e.qtyUsd)}
               </span>
-              <span className="hidden w-[52px] shrink-0 text-right font-mono text-[8.5px] uppercase tracking-wider text-mist-600 sm:block">
-                {e.exchange}
+              <span className="hidden w-[62px] shrink-0 items-center justify-end gap-1 text-right font-mono text-[8.5px] uppercase tracking-wider sm:flex">
+                {e.exchange === "OKX" && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-long-400" title="Liquidación real (OKX)" />}
+                <span className={e.exchange === "OKX" ? "font-bold text-long-300" : "text-mist-600"}>{e.exchange}</span>
               </span>
               {big && (
                 <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 bg-flare-400 shadow-[0_0_8px_rgba(255,178,36,0.7)]" />
@@ -74,7 +86,7 @@ export default function LiquidationFeed({ state, paused }: Props) {
         <span>umbral ballena: {fmtUsd(meta.liqScale * 1e6 * 0.12)}</span>
         <span className="flex items-center gap-1.5">
           <span className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-flare-400" : "bg-long-400"}`} />
-          {paused ? "buffer congelado" : "streaming ws"}
+          {paused ? "buffer congelado" : isReal ? "okx ws + simulación" : "streaming ws"}
         </span>
       </footer>
     </section>

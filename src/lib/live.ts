@@ -233,3 +233,165 @@ export function connectTickers(
     }
   };
 }
+
+// ---------- trades en vivo (aggTrade de Binance → delta real) ----------
+export function connectTrades(symbol: string, onDelta: (usdDelta: number) => void): () => void {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let retry = 0;
+  const open = () => {
+    if (closed) return;
+    ws = new WebSocket(`wss://data-stream.binance.vision/ws/${symbol.toLowerCase()}@aggTrade`);
+    ws.onopen = () => {
+      retry = 0;
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const d = JSON.parse(ev.data as string) as { p?: string; q?: string; m?: boolean };
+        if (d.p && d.q) {
+          const usd = Number(d.p) * Number(d.q);
+          // m=true → el comprador fue maker ⇒ venta agresiva (taker sell)
+          if (Number.isFinite(usd)) onDelta(d.m ? -usd : usd);
+        }
+      } catch {
+        /* mensaje no esperado */
+      }
+    };
+    ws.onclose = () => {
+      if (!closed) {
+        retry += 1;
+        window.setTimeout(open, Math.min(15000, 1200 * retry));
+      }
+    };
+    ws.onerror = () => {
+      try {
+        ws?.close();
+      } catch {
+        /* ya cerrado */
+      }
+    };
+  };
+  open();
+  return () => {
+    closed = true;
+    try {
+      ws?.close();
+    } catch {
+      /* ya cerrado */
+    }
+  };
+}
+
+// ---------- liquidaciones REALES (OKX, canal público liquidation-orders) ----------
+export interface RawLiq {
+  base: string;
+  side: "long" | "short";
+  px: number;
+  usd: number;
+  ts: number;
+}
+
+// valor de contrato (ctVal) por símbolo, con respaldo determinista
+const CT_FALLBACK: Record<string, number> = {
+  BTC: 0.01, ETH: 0.1, SOL: 1, BNB: 0.1, XRP: 100, DOGE: 1000,
+};
+
+export async function fetchContractValue(instId: string, base: string): Promise<number> {
+  try {
+    const r = await fetch(
+      `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=${instId}`,
+      { signal: withTimeout(7000) }
+    );
+    if (!r.ok) throw new Error(`instruments ${r.status}`);
+    const j = (await r.json()) as { data?: { ctVal?: string }[] };
+    const v = Number(j.data?.[0]?.ctVal);
+    if (Number.isFinite(v) && v > 0) return v;
+  } catch {
+    /* se usa el valor por defecto */
+  }
+  return CT_FALLBACK[base] ?? 1;
+}
+
+export function connectLiquidations(
+  bases: string[],
+  ctVals: Record<string, number>,
+  onEvent: (e: RawLiq) => void
+): () => void {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let retry = 0;
+  let pingId = 0;
+  const open = () => {
+    if (closed) return;
+    ws = new WebSocket("wss://ws.okx.com:8443/ws/v5/public");
+    ws.onopen = () => {
+      retry = 0;
+      ws?.send(
+        JSON.stringify({
+          op: "subscribe",
+          args: bases.map((b) => ({ channel: "liquidation-orders", instId: `${b}-USDT-SWAP` })),
+        })
+      );
+      // OKX exige un ping cada <30 s
+      pingId = window.setInterval(() => {
+        try {
+          ws?.send("ping");
+        } catch {
+          /* sin conexión */
+        }
+      }, 20_000);
+    };
+    ws.onmessage = (ev) => {
+      const txt = ev.data as string;
+      if (txt === "pong") return;
+      try {
+        const j = JSON.parse(txt) as {
+          arg?: { channel?: string; instId?: string };
+          data?: { side?: string; sz?: string; px?: string; ts?: string }[];
+        };
+        if (j.arg?.channel !== "liquidation-orders" || !j.data) return;
+        const base = (j.arg.instId ?? "").split("-")[0];
+        for (const d of j.data) {
+          const px = Number(d.px);
+          const sz = Number(d.sz);
+          if (!Number.isFinite(px) || !Number.isFinite(sz) || px <= 0) continue;
+          const ct = ctVals[base] ?? 1;
+          onEvent({
+            base,
+            // una venta forzosa liquida un long; una compra forzosa, un short
+            side: d.side === "sell" ? "long" : "short",
+            px,
+            usd: sz * ct * px,
+            ts: Number(d.ts) || Date.now(),
+          });
+        }
+      } catch {
+        /* mensaje no esperado */
+      }
+    };
+    ws.onclose = () => {
+      window.clearInterval(pingId);
+      if (!closed) {
+        retry += 1;
+        window.setTimeout(open, Math.min(20_000, 1500 * retry));
+      }
+    };
+    ws.onerror = () => {
+      try {
+        ws?.close();
+      } catch {
+        /* ya cerrado */
+      }
+    };
+  };
+  open();
+  return () => {
+    closed = true;
+    window.clearInterval(pingId);
+    try {
+      ws?.close();
+    } catch {
+      /* ya cerrado */
+    }
+  };
+}
