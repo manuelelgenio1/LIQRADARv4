@@ -10,6 +10,7 @@ import { FundingOIPanel, DataQualityPanel } from "./components/MetricsPanels";
 import MarketMakerPanel from "./components/MarketMakerPanel";
 import LiquidationFeed from "./components/LiquidationFeed";
 import TrendConsensusPanel from "./components/TrendConsensusPanel";
+import ValidationLab from "./components/ValidationLab";
 
 // ---------- ErrorBoundary: nunca más una pantalla en blanco ----------
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
@@ -114,13 +115,21 @@ function Dashboard() {
           </div>
         </div>
 
+        {/* fila 4: laboratorio de validación (track record de los pools) */}
+        <ValidationLab
+          log={engine.poolLog}
+          stats={engine.poolStats}
+          symbol={engine.symbol}
+          decimals={engine.meta.decimals}
+        />
+
         <footer className="flex flex-col items-center justify-between gap-2 border-t border-ink-700/50 pb-4 pt-5 font-mono text-[9.5px] uppercase tracking-[0.18em] text-mist-600 sm:flex-row">
           <span>
             <span className="text-long-400">◉</span> LIQRADAR v2.1 — radar de liquidez y liquidaciones
           </span>
           <span>
             {engine.source === "live"
-              ? "datos en vivo · binance (ws + rest) · liquidaciones estimadas por modelo"
+              ? "datos en vivo · binance (ws + rest) · liquidaciones estimadas · validadas por el laboratorio"
               : engine.source === "sim"
                 ? "modo simulado — sin conexión con binance · fines educativos"
                 : "conectando con el mercado…"}

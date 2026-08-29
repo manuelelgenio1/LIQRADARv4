@@ -21,6 +21,12 @@ import {
   depthToState,
   type TickerInfo,
 } from "../lib/live";
+import {
+  syncPools,
+  computeStats,
+  loadPoolLog,
+  type PoolRecord,
+} from "../lib/validation";
 
 export type Source = "live" | "sim" | "connecting";
 
@@ -74,6 +80,11 @@ export function useMarketEngine() {
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
   const lastPatchRef = useRef(0);
+
+  // laboratorio de validación: track record de pools persistido
+  const [poolLog, setPoolLog] = useState<PoolRecord[]>(loadPoolLog);
+  const stateRef = useRef<MarketState | null>(null);
+  stateRef.current = state;
   // latencia real medida: hora local − hora del evento en el servidor
   const wsLatencyRef = useRef<number | null>(null);
 
@@ -248,6 +259,21 @@ export function useMarketEngine() {
     }
   }, [state.events, state.meta]);
 
+  // laboratorio: cada 3 s registra pools nuevos y actualiza su estado
+  // (barrido / expirado / resultado) con el precio vivo del mercado
+  useEffect(() => {
+    if (paused || source === "connecting") return;
+    const id = window.setInterval(() => {
+      const s = stateRef.current;
+      if (!s) return;
+      const price = s.candles[s.candles.length - 1].c;
+      setPoolLog(syncPools(s.meta.symbol, s.clusters, price, Date.now()));
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [paused, source]);
+
+  const poolStats = useMemo(() => computeStats(poolLog, symbol), [poolLog, symbol]);
+
   const dismissToast = (id: string) => setToasts((t) => t.filter((x) => x.id !== id));
 
   return {
@@ -263,6 +289,8 @@ export function useMarketEngine() {
     livePrices,
     toasts,
     dismissToast,
+    poolLog,
+    poolStats,
     symbols: SYMBOLS,
     timeframes: TIMEFRAMES,
   };
