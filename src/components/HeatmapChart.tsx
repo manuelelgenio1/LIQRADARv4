@@ -210,7 +210,7 @@ export function computeVwap(candles: { t: number; h: number; l: number; c: numbe
 }
 
 // ---------- Volume Profile: POC + Área de Valor (VAH/VAL, 70% del volumen) ----------
-export interface VolProfile { poc: number; vah: number; val: number; total: number; }
+export interface VolProfile { poc: number; vah: number; val: number; total: number; rows: Float64Array; rowH: number; }
 export function computeVolProfile(
   candles: { h: number; l: number; c: number; v: number }[],
   pMin: number,
@@ -251,7 +251,7 @@ export function computeVolProfile(
   }
   const val = pMin + lo * rowH;
   const vah = pMin + (hi + 1) * rowH;
-  return { poc, vah, val, total };
+  return { poc, vah, val, total, rows: vol, rowH };
 }
 
 // ---------- Régimen de liquidez (funding + variación de OI) ----------
@@ -828,23 +828,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     if (layers.vp && volProfile) {
       const span = state.pMax - state.pMin;
       if (span > 0) {
-        const ROWS = 60;
-        const rowH = span / ROWS;
-        const vol = new Float64Array(ROWS);
+        // reutiliza las filas de volumen calculadas en el memo (sin recalcular)
+        const vol = volProfile.rows;
+        const rowH = volProfile.rowH;
         let maxV = 0;
-        for (let i = view.start; i < CANDLE_COUNT; i++) {
-          const k = candles[i];
-          const v = Math.max(0, k.v);
-          if (v <= 0) continue;
-          const rLo = Math.max(0, Math.floor(((k.l - state.pMin) / span) * ROWS));
-          const rHi = Math.min(ROWS - 1, Math.floor(((k.h - state.pMin) / span) * ROWS));
-          const rows = Math.max(1, rHi - rLo + 1);
-          for (let r = rLo; r <= rHi; r++) vol[r] += v / rows;
-        }
-        for (let r = 0; r < ROWS; r++) maxV = Math.max(maxV, vol[r]);
+        for (let r = 0; r < vol.length; r++) maxV = Math.max(maxV, vol[r]);
         const maxBarW = plotW * 0.16;
         // barras del histograma (desde la izquierda)
-        for (let r = 0; r < ROWS; r++) {
+        for (let r = 0; r < vol.length; r++) {
           if (vol[r] <= 0) continue;
           const pTop = state.pMin + (r + 1) * rowH;
           const pBot = state.pMin + r * rowH;
