@@ -65,11 +65,11 @@ function loadZoom(tf: string): number {
 }
 
 // ---------- sistema de capas (overlays conmutables) ----------
-type LayerId = "clusters" | "lev" | "sessions" | "ema" | "st" | "cvdOv" | "voids" | "vwap";
+type LayerId = "clusters" | "lev" | "sessions" | "ema" | "st" | "cvdOv" | "voids" | "vwap" | "vp";
 type Layers = Record<LayerId, boolean>;
 const LAYER_KEY = "liqradar:layers:v1";
 const DEFAULT_LAYERS: Layers = {
-  clusters: true, lev: true, sessions: true, ema: true, st: true, cvdOv: false, voids: true, vwap: true,
+  clusters: true, lev: true, sessions: true, ema: true, st: true, cvdOv: false, voids: true, vwap: true, vp: true,
 };
 const LAYER_META: { id: LayerId; label: string; on: string; tip: string }[] = [
   { id: "clusters", label: "Clúster", on: "text-short-300", tip: "Líneas de los clústeres de liquidación detectados" },
@@ -79,6 +79,8 @@ const LAYER_META: { id: LayerId; label: string; on: string; tip: string }[] = [
   { id: "st", label: "ST", on: "text-long-300", tip: "Supertrend (línea ATR)" },
   { id: "cvdOv", label: "CVD↑", on: "text-flare-300", tip: "CVD superpuesto al precio (divergencias)" },
   { id: "voids", label: "Huecos", on: "text-flare-300", tip: "Huecos de liquidez (bandas frías)" },
+  { id: "vwap", label: "VWAP", on: "text-mist-200", tip: "Precio medio ponderado por volumen (referencia institucional)" },
+  { id: "vp", label: "V. Profile", on: "text-mist-300", tip: "Perfil de volumen: POC + Área de Valor (VAH/VAL)" },
 ];
 function loadLayers(): Layers {
   const out = { ...DEFAULT_LAYERS };
@@ -187,6 +189,99 @@ export function computeVoids(
   return voids.sort((a, z) => z.width - a.width).slice(0, 3);
 }
 
+// ---------- VWAP (precio medio ponderado por volumen, reiniciado por sesión UTC) ----------
+export function computeVwap(candles: { t: number; h: number; l: number; c: number; v: number }[]): number[] {
+  const n = candles.length;
+  const out = new Array(n).fill(NaN);
+  if (!n) return out;
+  let cumPV = 0, cumV = 0;
+  let curDay = Math.floor(candles[0].t / DAY_MS);
+  for (let i = 0; i < n; i++) {
+    const k = candles[i];
+    const d = Math.floor(k.t / DAY_MS);
+    if (d !== curDay) { cumPV = 0; cumV = 0; curDay = d; } // reset diario
+    const typical = (k.h + k.l + k.c) / 3;
+    const v = Math.max(0, k.v);
+    cumPV += typical * v;
+    cumV += v;
+    out[i] = cumV > 0 ? cumPV / cumV : k.c;
+  }
+  return out;
+}
+
+// ---------- Volume Profile: POC + Área de Valor (VAH/VAL, 70% del volumen) ----------
+export interface VolProfile { poc: number; vah: number; val: number; total: number; }
+export function computeVolProfile(
+  candles: { h: number; l: number; c: number; v: number }[],
+  pMin: number,
+  pMax: number,
+  start: number
+): VolProfile | null {
+  const span = pMax - pMin;
+  if (!(span > 0)) return null;
+  const ROWS = 60;
+  const vol = new Float64Array(ROWS);
+  let total = 0;
+  for (let i = start; i < candles.length; i++) {
+    const k = candles[i];
+    const v = Math.max(0, k.v);
+    if (v <= 0) continue;
+    // distribuir el volumen de la vela en las filas que atraviesa
+    const rLo = Math.max(0, Math.floor(((k.l - pMin) / span) * ROWS));
+    const rHi = Math.min(ROWS - 1, Math.floor(((k.h - pMin) / span) * ROWS));
+    const rows = Math.max(1, rHi - rLo + 1);
+    const per = v / rows;
+    for (let r = rLo; r <= rHi; r++) { vol[r] += per; total += per; }
+  }
+  if (total <= 0) return null;
+  const rowH = span / ROWS;
+  // POC: fila con más volumen
+  let pocRow = 0;
+  for (let r = 1; r < ROWS; r++) if (vol[r] > vol[pocRow]) pocRow = r;
+  const poc = pMin + (pocRow + 0.5) * rowH;
+  // Área de Valor: expandir desde el POC hasta cubrir el 70% del volumen
+  let acc = vol[pocRow];
+  const target = total * 0.7;
+  let lo = pocRow, hi = pocRow;
+  while (acc < target && (lo > 0 || hi < ROWS - 1)) {
+    const downV = lo > 0 ? vol[lo - 1] : -1;
+    const upV = hi < ROWS - 1 ? vol[hi + 1] : -1;
+    if (downV >= upV) { lo--; acc += vol[lo]; }
+    else { hi++; acc += vol[hi]; }
+  }
+  const val = pMin + lo * rowH;
+  const vah = pMin + (hi + 1) * rowH;
+  return { poc, vah, val, total };
+}
+
+// ---------- Régimen de liquidez (funding + variación de OI) ----------
+// Cruza el coste de financiación con el flujo de OI para leer la fragilidad
+// del mercado (la señal que usan los proveedores de mapas de liquidación):
+//   funding alto + OI subiendo  → largos aglomerados, subida frágil (riesgo long-squeeze)
+//   funding bajo + OI subiendo  → cortos aglomerados, bajada frágil (riesgo short-squeeze)
+//   OI cayendo con fuerza       → despalancamiento / liquidaciones en curso
+export interface LiqRegime { label: string; tone: "long" | "short" | "warn" | "flat"; note: string; }
+export function computeLiqRegime(fundingPct: number, oiDeltaPct: number): LiqRegime {
+  const f = Number.isFinite(fundingPct) ? fundingPct : 0;
+  const d = Number.isFinite(oiDeltaPct) ? oiDeltaPct : 0;
+  if (d < -1.2) {
+    return { label: "Despalancamiento", tone: "warn", note: "OI cayendo: liquidaciones en curso, el movimiento pierde combustible" };
+  }
+  if (f > 0.03 && d > 0.4) {
+    return { label: "Longs aglomerados", tone: "short", note: "Funding caro + OI subiendo: subida frágil, riesgo de long-squeeze" };
+  }
+  if (f < -0.03 && d > 0.4) {
+    return { label: "Shorts aglomerados", tone: "long", note: "Funding negativo + OI subiendo: bajada frágil, riesgo de short-squeeze" };
+  }
+  if (f > 0.03) {
+    return { label: "Sesgo largo caro", tone: "short", note: "Funding elevado: los largos pagan prima, el lado largo está saturado" };
+  }
+  if (f < -0.03) {
+    return { label: "Sesgo corto caro", tone: "long", note: "Funding negativo: los cortos pagan prima, el lado corto está saturado" };
+  }
+  return { label: "Equilibrado", tone: "flat", note: "Funding neutro y OI estable: sin aglomeración clara de liquidez" };
+}
+
 const TREND_META: Record<TrendDir, { label: string; c: string; bar: string }> = {
   alcista: { label: "Alcista", c: "border-long-500/50 bg-long-900/40 text-long-300", bar: "#2de0c0" },
   bajista: { label: "Bajista", c: "border-short-500/50 bg-short-900/50 text-short-300", bar: "#ff5d7e" },
@@ -284,6 +379,8 @@ const LAYER_DOT: Record<LayerId, string> = {
   st: "bg-long-400",
   cvdOv: "bg-flare-300",
   voids: "bg-flare-300",
+  vwap: "bg-mist-200",
+  vp: "bg-mist-400",
 };
 
 // menú desplegable de capas: agrupa los 7 overlays en un solo control compacto
@@ -506,6 +603,13 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     [state.candles, state.heat, state.pMin, state.pMax, view.start]
   );
 
+  // VWAP (reiniciado por sesión UTC) y Perfil de Volumen (POC + Área de Valor)
+  const vwap = useMemo(() => computeVwap(state.candles), [state.candles]);
+  const volProfile = useMemo(
+    () => computeVolProfile(state.candles, state.pMin, state.pMax, view.start),
+    [state.candles, state.pMin, state.pMax, view.start]
+  );
+
   // exportar el gráfico como PNG
   const exportPng = () => {
     const canvas = canvasRef.current;
@@ -717,6 +821,95 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         ctx.textAlign = "left";
         ctx.fillText(tag, 12, top + 8.5);
         ctx.font = "10px 'IBM Plex Mono', monospace";
+      }
+    }
+
+    // ---- Volume Profile: histograma lateral + POC + Área de Valor (VAH/VAL) ----
+    if (layers.vp && volProfile) {
+      const span = state.pMax - state.pMin;
+      if (span > 0) {
+        const ROWS = 60;
+        const rowH = span / ROWS;
+        const vol = new Float64Array(ROWS);
+        let maxV = 0;
+        for (let i = view.start; i < CANDLE_COUNT; i++) {
+          const k = candles[i];
+          const v = Math.max(0, k.v);
+          if (v <= 0) continue;
+          const rLo = Math.max(0, Math.floor(((k.l - state.pMin) / span) * ROWS));
+          const rHi = Math.min(ROWS - 1, Math.floor(((k.h - state.pMin) / span) * ROWS));
+          const rows = Math.max(1, rHi - rLo + 1);
+          for (let r = rLo; r <= rHi; r++) vol[r] += v / rows;
+        }
+        for (let r = 0; r < ROWS; r++) maxV = Math.max(maxV, vol[r]);
+        const maxBarW = plotW * 0.16;
+        // barras del histograma (desde la izquierda)
+        for (let r = 0; r < ROWS; r++) {
+          if (vol[r] <= 0) continue;
+          const pTop = state.pMin + (r + 1) * rowH;
+          const pBot = state.pMin + r * rowH;
+          const by0 = y(pTop), by1 = y(pBot);
+          if (by1 < plotTop || by0 > plotBottom) continue;
+          const inVA = pBot >= volProfile.val && pTop <= volProfile.vah;
+          const w = (vol[r] / maxV) * maxBarW;
+          ctx.fillStyle = inVA ? "rgba(143,163,196,0.20)" : "rgba(143,163,196,0.10)";
+          ctx.fillRect(0, Math.max(plotTop, by0), w, Math.max(1, Math.min(plotBottom, by1) - Math.max(plotTop, by0)));
+        }
+        // línea POC (punto de control, el nivel con más volumen)
+        const drawVpLine = (price: number, col: string, label: string, dash?: number[]) => {
+          const ly = y(price);
+          if (ly < plotTop + 4 || ly > plotBottom - 4) return;
+          ctx.strokeStyle = col;
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash(dash ?? []);
+          ctx.beginPath();
+          ctx.moveTo(0, ly); ctx.lineTo(plotW, ly);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.font = "600 8.5px 'IBM Plex Mono', monospace";
+          const tw = ctx.measureText(label).width;
+          ctx.fillStyle = "rgba(7,12,22,0.9)";
+          ctx.fillRect(6, ly - 7, tw + 10, 13);
+          ctx.strokeStyle = col;
+          ctx.strokeRect(6.5, ly - 6.5, tw + 9, 12);
+          ctx.fillStyle = col;
+          ctx.textAlign = "left";
+          ctx.fillText(label, 11, ly + 0.5);
+          ctx.font = "10px 'IBM Plex Mono', monospace";
+        };
+        drawVpLine(volProfile.poc, "rgba(219,230,247,0.85)", `POC ${fmtPrice(volProfile.poc, meta.decimals)}`);
+        drawVpLine(volProfile.vah, "rgba(143,163,196,0.6)", "VAH", [4, 4]);
+        drawVpLine(volProfile.val, "rgba(143,163,196,0.6)", "VAL", [4, 4]);
+      }
+    }
+
+    // ---- VWAP (referencia institucional, reiniciado por sesión) ----
+    if (layers.vwap) {
+      ctx.beginPath();
+      let started = false;
+      for (let i = view.start; i < CANDLE_COUNT; i++) {
+        const v = vwap[i];
+        if (!Number.isFinite(v)) continue;
+        const px = (i - view.start) * cellW + cellW / 2;
+        const py = y(v);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = "rgba(219,230,247,0.55)";
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([8, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // punto en el VWAP actual
+      const lastV = vwap[CANDLE_COUNT - 1];
+      if (Number.isFinite(lastV)) {
+        const py = y(lastV);
+        if (py > plotTop && py < plotBottom) {
+          ctx.fillStyle = "#dbe6f7";
+          ctx.beginPath();
+          ctx.arc(plotW - 3, py, 2.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 
@@ -1211,7 +1404,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd, logScale, layers, liqVoids, sessions, scaleY, scalePrice]);
+  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -1238,8 +1431,16 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const tm = TREND_META[cons.dir];
   // convicción ajustada por la confluencia multi-timeframe
   const mtf = mtfAdjust(cons, confluence);
+  const regime = computeLiqRegime(state.funding, state.oiDelta1h);
   const lastStUp = ind.stUpConf[ind.stUpConf.length - 1];
   const zoomed = visibleCount < CANDLE_COUNT;
+
+  const REGIME_TONE: Record<LiqRegime["tone"], string> = {
+    long: "border-long-500/40 bg-long-900/40 text-long-300",
+    short: "border-short-500/40 bg-short-900/40 text-short-300",
+    warn: "border-flare-400/40 bg-flare-400/10 text-flare-300",
+    flat: "border-ink-600 bg-ink-800/60 text-mist-400",
+  };
 
   return (
     <section
@@ -1295,6 +1496,17 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
               MTF {mtf.agree}/{mtf.total}
             </span>
           )}
+        </span>
+
+        {/* régimen de liquidez (funding + OI) */}
+        <span
+          className={`hidden items-center gap-1.5 border px-2.5 py-1.5 lg:flex ${REGIME_TONE[regime.tone]}`}
+          title={`${regime.note} · Funding ${fmtPct(state.funding, 3)} · OI ${fmtPct(state.oiDelta1h, 2)} 1h`}
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+            <path d="M12 2v6M12 22v-6M4.9 4.9l4.2 4.2M19.1 19.1l-4.2-4.2M2 12h6M22 12h-6M4.9 19.1l4.2-4.2M19.1 4.9l-4.2 4.2" />
+          </svg>
+          <span className="font-mono text-[8.5px] font-bold uppercase tracking-widest">{regime.label}</span>
         </span>
 
         {/* acciones: capas (menú) · exportar PNG · pantalla completa */}
@@ -1555,6 +1767,11 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           <b className={`tick-num tracking-normal ${state.cvd[state.cvd.length - 1] >= 0 ? "text-long-300" : "text-short-300"}`}>
             {fmtCompact(state.cvd[state.cvd.length - 1])}
           </b>
+        </span>
+        <span className="h-3.5 w-px bg-ink-700" />
+        <span className="flex items-center gap-1.5" title={regime.note}>
+          Régimen{" "}
+          <b className={`border px-1.5 py-0.5 tracking-normal ${REGIME_TONE[regime.tone]}`}>{regime.label}</b>
         </span>
         <span className="ml-auto hidden items-center gap-2 md:flex">
           <span className="border border-ink-700 bg-ink-850 px-1.5 py-0.5 text-mist-400">{tfKey}</span>
