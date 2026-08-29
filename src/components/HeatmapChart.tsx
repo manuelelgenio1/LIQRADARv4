@@ -5,7 +5,7 @@ import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
 import { computeIndicators, getIndicatorCfg, type TrendDir } from "../lib/indicators";
 import { fmtAxisTime, fmtCompact, fmtHM, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
-type Osc = "cvd" | "macd" | "rsi" | "adx";
+type Osc = "cvd" | "macd" | "rsi" | "adx" | "vol";
 
 interface Props {
   state: MarketState;
@@ -53,6 +53,129 @@ function loadZoom(tf: string): number {
     /* sin almacenamiento */
   }
   return CANDLE_COUNT;
+}
+
+// ---------- sistema de capas (overlays conmutables) ----------
+type LayerId = "clusters" | "lev" | "sessions" | "ema" | "st" | "cvdOv" | "voids";
+type Layers = Record<LayerId, boolean>;
+const LAYER_KEY = "liqradar:layers:v1";
+const DEFAULT_LAYERS: Layers = {
+  clusters: true, lev: true, sessions: true, ema: true, st: true, cvdOv: false, voids: true,
+};
+const LAYER_META: { id: LayerId; label: string; on: string; tip: string }[] = [
+  { id: "clusters", label: "Clúster", on: "text-short-300", tip: "Líneas de los clústeres de liquidación detectados" },
+  { id: "lev", label: "Lev", on: "text-flare-300", tip: "Escalera de apalancamiento (x5–x100)" },
+  { id: "sessions", label: "PDH/PDL", on: "text-long-300", tip: "Alto/Bajo/Apertura del día anterior + sesión actual" },
+  { id: "ema", label: "EMA", on: "text-long-300", tip: "Medias móviles exponenciales" },
+  { id: "st", label: "ST", on: "text-long-300", tip: "Supertrend (línea ATR)" },
+  { id: "cvdOv", label: "CVD↑", on: "text-flare-300", tip: "CVD superpuesto al precio (divergencias)" },
+  { id: "voids", label: "Huecos", on: "text-flare-300", tip: "Huecos de liquidez (bandas frías)" },
+];
+function loadLayers(): Layers {
+  const out = { ...DEFAULT_LAYERS };
+  try {
+    const raw = localStorage.getItem(LAYER_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<Layers>;
+      for (const k of Object.keys(out) as LayerId[]) {
+        if (typeof p[k] === "boolean") out[k] = p[k] as boolean;
+      }
+    }
+  } catch {
+    /* valores por defecto */
+  }
+  return out;
+}
+
+// ---------- líneas de sesión: PDH/PDL/PDO + sesión actual (días UTC) ----------
+export interface Sessions {
+  pdh: number; pdl: number; pdo: number;      // día anterior
+  sdh: number; sdl: number; sdo: number;      // sesión (día) actual
+}
+const DAY_MS = 86_400_000;
+export function computeSessions(candles: { t: number; o: number; h: number; l: number }[], tfMin: number): Sessions {
+  const last = candles[candles.length - 1];
+  const lastDay = Math.floor(last.t / DAY_MS);
+  if (tfMin >= 1440) {
+    // velas diarias/semanales: la vela previa es "ayer"
+    const prev = candles.length > 1 ? candles[candles.length - 2] : last;
+    return { pdh: prev.h, pdl: prev.l, pdo: prev.o, sdh: last.h, sdl: last.l, sdo: last.o };
+  }
+  let pdh = -Infinity, pdl = Infinity, pdo = NaN;
+  let sdh = -Infinity, sdl = Infinity, sdo = NaN;
+  for (const c of candles) {
+    const d = Math.floor(c.t / DAY_MS);
+    if (d === lastDay - 1) {
+      pdh = Math.max(pdh, c.h);
+      pdl = Math.min(pdl, c.l);
+      if (Number.isNaN(pdo)) pdo = c.o;
+    } else if (d === lastDay) {
+      sdh = Math.max(sdh, c.h);
+      sdl = Math.min(sdl, c.l);
+      if (Number.isNaN(sdo)) sdo = c.o;
+    }
+  }
+  if (!Number.isFinite(pdh)) { pdh = last.h; pdl = last.l; pdo = last.o; }
+  if (!Number.isFinite(sdh)) { sdh = last.h; sdl = last.l; sdo = last.o; }
+  return { pdh, pdl, pdo, sdh, sdl, sdo };
+}
+
+// ---------- detección de huecos de liquidez (bandas frías entre zonas calientes) ----------
+export interface LiqVoid { yMin: number; yMax: number; center: number; width: number; }
+export function computeVoids(
+  candles: { t: number }[],
+  heat: Float32Array,
+  pMin: number,
+  pMax: number,
+  start: number
+): LiqVoid[] {
+  const span = pMax - pMin;
+  if (!(span > 0)) return [];
+  const BANDS = 48;
+  const per = new Float64Array(BANDS);
+  const cnt = new Float64Array(BANDS);
+  for (let i = start; i < candles.length; i++) {
+    for (let b = 0; b < HEAT_BINS; b++) {
+      const v = heat[i * HEAT_BINS + b];
+      if (v <= 0) continue;
+      const price = pMin + ((b + 0.5) / HEAT_BINS) * span;
+      const band = Math.min(BANDS - 1, Math.max(0, Math.floor(((price - pMin) / span) * BANDS)));
+      per[band] += v;
+      cnt[band] += 1;
+    }
+  }
+  const avg = new Float64Array(BANDS);
+  let maxAvg = 0;
+  for (let b = 0; b < BANDS; b++) {
+    avg[b] = cnt[b] > 0 ? per[b] / cnt[b] : 0;
+    maxAvg = Math.max(maxAvg, avg[b]);
+  }
+  if (maxAvg <= 0) return [];
+  const COLD = maxAvg * 0.06;   // una banda es "fría" si su calor medio es <6% del pico
+  const HOT = maxAvg * 0.22;    // ...y debe estar flanqueada por bandas calientes
+  const bandH = span / BANDS;
+  const voids: LiqVoid[] = [];
+  let b = 0;
+  while (b < BANDS) {
+    if (avg[b] < COLD) {
+      let e = b;
+      while (e + 1 < BANDS && avg[e + 1] < COLD) e++;
+      const width = (e - b + 1) * bandH;
+      const hasHotLeft = b > 0 && avg[b - 1] > HOT;
+      const hasHotRight = e + 1 < BANDS && avg[e + 1] > HOT;
+      // hueco válido: ancho mínimo, flanqueado por calor a ambos lados
+      if (width >= span * 0.012 && hasHotLeft && hasHotRight) {
+        const yMin = pMin + b * bandH;
+        const yMax = pMin + (e + 1) * bandH;
+        voids.push({ yMin, yMax, center: (yMin + yMax) / 2, width });
+      }
+      b = e + 1;
+    } else {
+      b++;
+    }
+  }
+  // los 3 más anchos, ordenados por tamaño
+  return voids.sort((a, z) => z.width - a.width).slice(0, 3);
 }
 
 const TREND_META: Record<TrendDir, { label: string; c: string; bar: string }> = {
@@ -180,10 +303,22 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
   }, [levOn]);
 
+  const [layers, setLayers] = useState<Layers>(loadLayers);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAYER_KEY, JSON.stringify(layers));
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [layers]);
+
   const cfg = getIndicatorCfg(tfKey);
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
 
   const ind = useMemo(() => computeIndicators(state.candles, cfg, tfMin), [state.candles, cfg, tfMin]);
+
+  // líneas de sesión (PDH/PDL/PDO + sesión actual)
+  const sessions = useMemo(() => computeSessions(state.candles, tfMin), [state.candles, tfMin]);
 
   // zoom por timeframe, persistido
   useEffect(() => {
@@ -233,6 +368,26 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const pad = (vHi - vLo) * 0.05 || Math.abs(vHi) * 0.001 || 1;
     return { start, yMin: vLo - pad, yMax: vHi + pad };
   }, [state.candles, visibleCount]);
+
+  // huecos de liquidez sobre la ventana visible
+  const liqVoids = useMemo(
+    () => computeVoids(state.candles, state.heat, state.pMin, state.pMax, view.start),
+    [state.candles, state.heat, state.pMin, state.pMax, view.start]
+  );
+
+  // exportar el gráfico como PNG
+  const exportPng = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    try {
+      const a = document.createElement("a");
+      a.download = `liqradar_${state.meta.symbol}_${tfKey}_${Date.now()}.png`;
+      a.href = canvas.toDataURL("image/png");
+      a.click();
+    } catch {
+      /* sin exportación */
+    }
+  };
 
   // ---- mapeo precio↔píxel (lineal o logarítmico) compartido por canvas y tooltip ----
   const scaleY = (p: number, plotTop: number, plotH: number) => {
@@ -398,8 +553,44 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
     ctx.restore();
 
+    // ---- huecos de liquidez (bandas frías donde el precio acelera) ----
+    if (layers.voids) {
+      for (const vd of liqVoids) {
+        const vy0 = y(vd.yMax);
+        const vy1 = y(vd.yMin);
+        if (vy1 < plotTop || vy0 > plotBottom) continue;
+        const top = Math.max(plotTop, vy0);
+        const bot = Math.min(plotBottom, vy1);
+        if (bot - top < 4) continue;
+        // banda sombreada
+        ctx.fillStyle = "rgba(255,178,36,0.05)";
+        ctx.fillRect(0, top, plotW, bot - top);
+        // bordes punteados
+        ctx.strokeStyle = "rgba(255,178,36,0.4)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 5]);
+        ctx.beginPath();
+        ctx.moveTo(0, top); ctx.lineTo(plotW, top);
+        ctx.moveTo(0, bot); ctx.lineTo(plotW, bot);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // etiqueta (ancho del hueco como % del precio, sin signo)
+        const tag = `HUECO ${((vd.width / lastC) * 100).toFixed(2)}%`;
+        ctx.font = "600 8.5px 'IBM Plex Mono', monospace";
+        const tw = ctx.measureText(tag).width;
+        ctx.fillStyle = "rgba(7,12,22,0.9)";
+        ctx.fillRect(6, top + 2, tw + 12, 13);
+        ctx.strokeStyle = "rgba(255,178,36,0.55)";
+        ctx.strokeRect(6.5, top + 2.5, tw + 11, 12);
+        ctx.fillStyle = "rgba(255,211,122,0.9)";
+        ctx.textAlign = "left";
+        ctx.fillText(tag, 12, top + 8.5);
+        ctx.font = "10px 'IBM Plex Mono', monospace";
+      }
+    }
+
     // marcadores de clústeres (línea reforzada + halo para destacar sobre el calor)
-    for (const cl of clusters.slice(0, 6)) {
+    if (layers.clusters) for (const cl of clusters.slice(0, 6)) {
       const cy = y(cl.price);
       if (cy < plotTop || cy > plotBottom) continue;
       const col = cl.side === "long" ? "45,224,192" : "255,93,126";
@@ -436,7 +627,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     // ---- escalera de apalancamiento (liq. ≈ precio × (1 ± 1/lev)) ----
     // Cada lado dibuja su línea en el precio real y apila las etiquetas en una
     // columna alineada a la derecha, resolviendo solapes para que nunca se pisen.
-    {
+    if (layers.lev) {
       const TAG_W = 84, TAG_H = 15, GAP = 2;
       const colX = plotW - TAG_W - 6;
       type LevTag = { lineY: number; tagY: number; col: string; tag: string; alpha: number };
@@ -490,6 +681,37 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       ctx.font = "10px 'IBM Plex Mono', monospace";
     }
 
+    // ---- líneas de sesión: PDH/PDL/PDO (día anterior) + sesión actual ----
+    if (layers.sessions) {
+      const drawLevel = (price: number, label: string, col: string, dash?: number[]) => {
+        const ly = y(price);
+        if (ly < plotTop + 4 || ly > plotBottom - 4) return;
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1;
+        ctx.setLineDash(dash ?? []);
+        ctx.beginPath();
+        ctx.moveTo(0, ly);
+        ctx.lineTo(plotW, ly);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = "600 8.5px 'IBM Plex Mono', monospace";
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(7,12,22,0.88)";
+        ctx.fillRect(6, ly - 15, tw + 12, 12);
+        ctx.fillStyle = col;
+        ctx.textAlign = "left";
+        ctx.fillText(label, 12, ly - 6.5);
+        ctx.font = "10px 'IBM Plex Mono', monospace";
+      };
+      // día anterior (referencias clave)
+      drawLevel(sessions.pdh, `PDH ${fmtPrice(sessions.pdh, meta.decimals)}`, "rgba(125,240,218,0.75)", [5, 4]);
+      drawLevel(sessions.pdl, `PDL ${fmtPrice(sessions.pdl, meta.decimals)}`, "rgba(255,147,169,0.75)", [5, 4]);
+      drawLevel(sessions.pdo, `PDO ${fmtPrice(sessions.pdo, meta.decimals)}`, "rgba(143,163,196,0.6)", [2, 4]);
+      // sesión actual
+      drawLevel(sessions.sdh, `SDH`, "rgba(45,224,192,0.45)", [2, 3]);
+      drawLevel(sessions.sdl, `SDL`, "rgba(255,93,126,0.45)", [2, 3]);
+    }
+
     // velas (solo visibles)
     for (let i = view.start; i < CANDLE_COUNT; i++) {
       const k = candles[i];
@@ -513,7 +735,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     ctx.beginPath();
     ctx.rect(0, plotTop, plotW, plotH);
     ctx.clip();
-    for (let i = Math.max(1, view.start); i < CANDLE_COUNT; i++) {
+    if (layers.st) for (let i = Math.max(1, view.start); i < CANDLE_COUNT; i++) {
       const x0 = (i - 1 - view.start) * cellW + cellW / 2;
       const x1 = (i - view.start) * cellW + cellW / 2;
       const col = ind.stUp[i] ? "#2de0c0" : "#ff5d7e";
@@ -550,9 +772,33 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       ctx.stroke();
       ctx.setLineDash([]);
     };
-    drawEma(ind.emaTrend, "rgba(143,163,196,0.75)", 1.2, [4, 4]);
-    drawEma(ind.emaSlow, "#ffb224", 1.5);
-    drawEma(ind.emaFast, "#7df0da", 1.5);
+    if (layers.ema) {
+      drawEma(ind.emaTrend, "rgba(143,163,196,0.75)", 1.2, [4, 4]);
+      drawEma(ind.emaSlow, "#ffb224", 1.5);
+      drawEma(ind.emaFast, "#7df0da", 1.5);
+    }
+
+    // ---- CVD superpuesto al precio (para detectar divergencias) ----
+    if (layers.cvdOv) {
+      let cMin = Infinity, cMax = -Infinity;
+      for (let i = view.start; i < CANDLE_COUNT; i++) {
+        cMin = Math.min(cMin, cvd[i]);
+        cMax = Math.max(cMax, cvd[i]);
+      }
+      const cSpan = cMax - cMin || 1;
+      const cyv = (v: number) => plotTop + ((cMax - v) / cSpan) * plotH;
+      ctx.beginPath();
+      for (let i = view.start; i < CANDLE_COUNT; i++) {
+        const px = (i - view.start) * cellW + cellW / 2;
+        if (i === view.start) ctx.moveTo(px, cyv(cvd[i]));
+        else ctx.lineTo(px, cyv(cvd[i]));
+      }
+      ctx.strokeStyle = "rgba(255,211,122,0.62)";
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([7, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.restore();
 
     // puntos de lectura en la última vela
@@ -732,6 +978,48 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       ctx.fillText(av.toFixed(1), 196, subTop + 1);
       ctx.fillStyle = "#48597a";
       ctx.fillText("fuerte ≥ 25", 236, subTop + 1);
+    } else if (osc === "vol") {
+      // barras de volumen coloreadas por el signo del delta + línea de delta
+      const vols = slice(candles.map((c) => c.v));
+      const dlts = slice(candles.map((c) => c.delta));
+      let vMax = 1e-9;
+      for (const v of vols) vMax = Math.max(vMax, v);
+      let dMax = 1e-9;
+      for (const d of dlts) dMax = Math.max(dMax, Math.abs(d));
+      const bw = Math.max(1.6, cellW * 0.6);
+      const zeroY = subTop + (subBottom - subTop) * 0.62;
+      // barras de volumen (desde la base)
+      for (let i = 0; i < vols.length; i++) {
+        const px = i * cellW + cellW / 2;
+        const h = (vols[i] / vMax) * (subBottom - zeroY - 2);
+        const buy = dlts[i] >= 0;
+        ctx.fillStyle = buy ? "rgba(45,224,192,0.5)" : "rgba(255,93,126,0.5)";
+        ctx.fillRect(px - bw / 2, subBottom - h, bw, h);
+      }
+      // línea de delta (reescaleada al tercio superior)
+      const dy = (d: number) => subTop + 4 + ((dMax - d) / (2 * dMax)) * (zeroY - subTop - 8);
+      ctx.strokeStyle = "rgba(95,115,150,0.5)";
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(0, dy(0));
+      ctx.lineTo(plotW, dy(0));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      for (let i = 0; i < dlts.length; i++) {
+        const px = i * cellW + cellW / 2;
+        if (i === 0) ctx.moveTo(px, dy(dlts[i]));
+        else ctx.lineTo(px, dy(dlts[i]));
+      }
+      ctx.strokeStyle = "#ffd37a";
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      ctx.fillStyle = "#8fa3c4";
+      ctx.textAlign = "left";
+      ctx.fillText("VOL · volumen + delta", 8, subTop + 1);
+      const dv = dlts[dlts.length - 1];
+      ctx.fillStyle = dv >= 0 ? "#2de0c0" : "#ff5d7e";
+      ctx.fillText(`Δ ${fmtCompact(dv)}`, 150, subTop + 1);
     } else {
       const rs = slice(ind.rsi);
       const ry = (v: number) => subTop + ((100 - v) / 100) * (subBottom - subTop);
@@ -791,7 +1079,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd, logScale, scaleY, scalePrice]);
+  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd, logScale, layers, liqVoids, sessions, scaleY, scalePrice]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -944,7 +1232,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         <ToolDivider />
 
         <ToolGroup label="Oscilador" title="Sub-panel inferior del gráfico">
-          {(["cvd", "macd", "rsi", "adx"] as Osc[]).map((o) => (
+          {(["cvd", "macd", "rsi", "adx", "vol"] as Osc[]).map((o) => (
             <button
               key={o}
               onClick={() => setOsc(o)}
@@ -977,6 +1265,39 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             </button>
           ))}
         </ToolGroup>
+
+        <ToolDivider />
+
+        <ToolGroup label="Capas" title="Overlays conmutables sobre el gráfico">
+          {LAYER_META.map((lm) => (
+            <button
+              key={lm.id}
+              onClick={() => setLayers((p) => ({ ...p, [lm.id]: !p[lm.id] }))}
+              className={`px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-wide transition-all duration-150 ${
+                layers[lm.id]
+                  ? `${lm.on} shadow-[inset_0_-2px_0_currentColor]`
+                  : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+              }`}
+              title={lm.tip}
+            >
+              {lm.label}
+            </button>
+          ))}
+        </ToolGroup>
+
+        <ToolDivider />
+
+        {/* exportar el gráfico como PNG */}
+        <button
+          onClick={exportPng}
+          className="flex items-center gap-1.5 self-center border border-ink-700 bg-ink-850/80 px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest text-mist-400 transition-all hover:border-long-500/40 hover:text-long-300"
+          title="Descargar el gráfico como imagen PNG"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+          </svg>
+          PNG
+        </button>
       </div>
 
       <div ref={wrapRef} className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>
@@ -994,25 +1315,38 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
         {/* leyenda flotante: indicadores sobre el gráfico + clave de colores */}
         <div className="pointer-events-none absolute left-2 top-2 z-10 flex flex-col items-start gap-1">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1.5 font-mono text-[9px] text-mist-500 backdrop-blur-[2px]">
-            <span className="flex items-center gap-1.5">
-              <span className="h-[2px] w-3.5 bg-long-300" /> EMA {cfg.fast}
-              <b className="tick-num text-mist-200">{fmtPrice(lastFast, state.meta.decimals)}</b>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-[2px] w-3.5 bg-flare-400" /> EMA {cfg.slow}
-              <b className="tick-num text-mist-200">{fmtPrice(lastSlow, state.meta.decimals)}</b>
-            </span>
-            <span className="hidden items-center gap-1.5 sm:flex">
-              <span className="h-0 w-3.5 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
-              <b className="tick-num text-mist-200">{fmtPrice(lastTrend, state.meta.decimals)}</b>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className={`h-[2px] w-3.5 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
-              ST {cfg.atr}×{cfg.stMult}
-              <b className={lastStUp ? "text-long-300" : "text-short-300"}>{lastStUp ? "▲" : "▼"}</b>
-            </span>
-          </div>
+          {(layers.ema || layers.st || layers.cvdOv) && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1.5 font-mono text-[9px] text-mist-500 backdrop-blur-[2px]">
+              {layers.ema && (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-[2px] w-3.5 bg-long-300" /> EMA {cfg.fast}
+                    <b className="tick-num text-mist-200">{fmtPrice(lastFast, state.meta.decimals)}</b>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-[2px] w-3.5 bg-flare-400" /> EMA {cfg.slow}
+                    <b className="tick-num text-mist-200">{fmtPrice(lastSlow, state.meta.decimals)}</b>
+                  </span>
+                  <span className="hidden items-center gap-1.5 sm:flex">
+                    <span className="h-0 w-3.5 border-t border-dashed border-mist-400" /> EMA {cfg.trend}
+                    <b className="tick-num text-mist-200">{fmtPrice(lastTrend, state.meta.decimals)}</b>
+                  </span>
+                </>
+              )}
+              {layers.st && (
+                <span className="flex items-center gap-1.5">
+                  <span className={`h-[2px] w-3.5 ${lastStUp ? "bg-long-400" : "bg-short-400"}`} />
+                  ST {cfg.atr}×{cfg.stMult}
+                  <b className={lastStUp ? "text-long-300" : "text-short-300"}>{lastStUp ? "▲" : "▼"}</b>
+                </span>
+              )}
+              {layers.cvdOv && (
+                <span className="flex items-center gap-1.5">
+                  <span className="h-0 w-3.5 border-t border-dashed border-flare-300" /> CVD
+                </span>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-2.5 border border-ink-700/70 bg-ink-900/80 px-2.5 py-1 font-mono text-[8px] uppercase tracking-wider text-mist-500 backdrop-blur-[2px]">
             <span className="flex items-center gap-1">
               <span className="h-1.5 w-1.5 bg-long-400/90" /> liq. longs ↓
