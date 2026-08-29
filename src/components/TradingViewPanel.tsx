@@ -71,13 +71,16 @@ function injectWidget(
   holder: HTMLDivElement,
   tvSymbol: string,
   tvInterval: string,
-  studies: string[]
+  studies: string[],
+  height: number
 ) {
   holder.innerHTML = "";
+  // altura explícita en px (autosize puede colapsar el iframe en layouts flex)
+  const h = Math.max(280, Math.round(height));
 
   const inner = document.createElement("div");
   inner.className = "tradingview-widget-container__widget";
-  inner.style.height = "100%";
+  inner.style.height = `${h}px`;
   inner.style.width = "100%";
   holder.appendChild(inner);
 
@@ -86,7 +89,8 @@ function injectWidget(
   script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
   script.async = true;
   script.text = JSON.stringify({
-    autosize: true,
+    width: "100%",
+    height: h,
     symbol: tvSymbol,
     interval: tvInterval,
     timezone: "Etc/UTC",
@@ -161,16 +165,24 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
     } catch { /* sin almacenamiento */ }
   }, [heightId]);
 
-  // inyección del widget: va al contenedor activo (panel normal o pantalla completa)
+  // inyección del widget: va al contenedor activo (panel normal o pantalla completa).
+  // Se mide el contenedor real y se pasa la altura explícita al widget para que
+  // el iframe nunca se colapse (autosize es poco fiable en layouts flex/grid).
   useEffect(() => {
     const holder = fs ? fsHolderRef.current : holderRef.current;
     if (!holder || !open) return;
-    injectWidget(holder, tvSymbol, tvInterval, studies);
+    // esperar un frame a que el contenedor tenga su tamaño definitivo
+    const raf = requestAnimationFrame(() => {
+      const rect = holder.getBoundingClientRect();
+      // −32 px: la barra de atribución que TradingView añade debajo del gráfico
+      injectWidget(holder, tvSymbol, tvInterval, studies, rect.height - 32);
+    });
     return () => {
+      cancelAnimationFrame(raf);
       holder.innerHTML = "";
-      if (fsHolderRef.current) fsHolderRef.current.innerHTML = "";
+      if (fsHolderRef.current && fsHolderRef.current !== holder) fsHolderRef.current.innerHTML = "";
     };
-  }, [open, fs, tvSymbol, tvInterval, studies]);
+  }, [open, fs, tvSymbol, tvInterval, studies, heightPx]);
 
   // ESC sale de pantalla completa + bloquea el scroll del fondo
   useEffect(() => {
