@@ -60,10 +60,12 @@ export default function OrderBookPanel({ state, live }: Props) {
         <span>Precio</span><span className="text-right">Tamaño</span><span className="text-right">Σ Total</span><span className="text-right">Fuente</span>
       </div>
 
-      <div className="flex-1 overflow-hidden">
-        {asks.slice(0, 8).reverse().map((lv, i) => (
-          <Row key={`a${i}`} lv={lv} max={maxTotal} side="ask" decimals={meta.decimals} />
-        ))}
+      <div className="flex min-h-0 flex-1 flex-col justify-between overflow-hidden">
+        <div>
+          {asks.slice(0, 7).reverse().map((lv, i) => (
+            <Row key={`a${i}`} lv={lv} max={maxTotal} side="ask" decimals={meta.decimals} />
+          ))}
+        </div>
 
         <div className="flex items-center gap-3 border-y border-ink-700/60 bg-ink-900/80 px-3 py-2">
           <span className={`tick-num font-display text-lg font-bold ${imbalance >= 0 ? "text-long-300" : "text-short-300"}`}>
@@ -75,9 +77,11 @@ export default function OrderBookPanel({ state, live }: Props) {
           </span>
         </div>
 
-        {bids.slice(0, 8).map((lv, i) => (
-          <Row key={`b${i}`} lv={lv} max={maxTotal} side="bid" decimals={meta.decimals} />
-        ))}
+        <div>
+          {bids.slice(0, 7).map((lv, i) => (
+            <Row key={`b${i}`} lv={lv} max={maxTotal} side="bid" decimals={meta.decimals} />
+          ))}
+        </div>
       </div>
 
       {/* desequilibrio */}

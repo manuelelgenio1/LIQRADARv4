@@ -104,7 +104,7 @@ export function DataQualityPanel({ state }: { state: MarketState }) {
     : { t: "DEGRADADA", c: "text-short-300 border-short-500/40 bg-short-900/50" };
 
   return (
-    <section className="panel anim-reveal" style={{ animationDelay: "0.36s" }}>
+    <section className="panel anim-reveal flex flex-1 flex-col" style={{ animationDelay: "0.36s" }}>
       <header className="flex items-center gap-3 border-b border-ink-700/50 px-4 py-3">
         <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Calidad de datos</h2>
         <span className={`ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${status.c}`}>

@@ -28,7 +28,7 @@ export default function ClusterList({ state }: Props) {
         <span>Lado</span><span>Precio / zona</span><span className="text-right">Dist.</span><span className="text-right">Nocional</span><span className="text-right">Lev.</span>
       </div>
 
-      <div className="scroll-slim flex-1 overflow-y-auto">
+      <div className="scroll-slim max-h-[430px] min-h-0 flex-1 overflow-y-auto lg:max-h-none">
         {clusters.map((cl, i) => {
           const dist = ((cl.price - cur) / cur) * 100;
           const isLong = cl.side === "long";

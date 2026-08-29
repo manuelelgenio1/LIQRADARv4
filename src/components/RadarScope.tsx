@@ -51,8 +51,8 @@ export default function RadarScope({ state }: Props) {
         </span>
       </header>
 
-      <div className="flex-1 px-3 py-4">
-        <div className="relative mx-auto w-full max-w-[380px]">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-3 py-4">
+        <div className="relative w-full max-w-[420px]">
           <svg viewBox={`0 0 ${S} ${S}`} className="w-full" onMouseLeave={() => setHovered(null)}>
             <defs>
               <radialGradient id="scopeBg" cx="50%" cy="50%" r="50%">

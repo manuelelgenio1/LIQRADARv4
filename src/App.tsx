@@ -100,35 +100,27 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* fila 2: libro + clústeres + métricas */}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12">
-          <div className="xl:col-span-4">
-            <OrderBookPanel state={state} live={engine.source === "live"} />
-          </div>
-          <div className="xl:col-span-4">
-            <ClusterList state={state} />
-          </div>
-          <div className="space-y-4 md:col-span-2 xl:col-span-4">
+        {/* fila 2 · order flow: libro + clústeres + feed — tres paneles de igual altura */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <OrderBookPanel state={state} live={engine.source === "live"} />
+          <ClusterList state={state} />
+          <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
+        </div>
+
+        {/* fila 3 · análisis: métricas apiladas + consenso + market maker — igual altura */}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <div className="flex h-full flex-col gap-4">
             <FundingOIPanel state={state} sentiment={engine.sentiment} />
             <DataQualityPanel state={state} />
           </div>
-        </div>
-
-        {/* fila 3: feed + consenso + market maker path */}
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-          <div className="xl:col-span-7">
-            <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
-          </div>
-          <div className="space-y-4 xl:col-span-5">
-            <TrendConsensusPanel
-              state={state}
-              tfKey={engine.tfKey}
-              calibration={engine.calibration}
-              setCalibration={engine.setCalibration}
-              confluence={engine.confluence}
-            />
-            <MarketMakerPanel state={state} />
-          </div>
+          <TrendConsensusPanel
+            state={state}
+            tfKey={engine.tfKey}
+            calibration={engine.calibration}
+            setCalibration={engine.setCalibration}
+            confluence={engine.confluence}
+          />
+          <MarketMakerPanel state={state} />
         </div>
 
         {/* fila 4: laboratorio de validación (track record de los pools) */}

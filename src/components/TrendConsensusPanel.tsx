@@ -87,7 +87,7 @@ export default function TrendConsensusPanel({ state, tfKey, calibration, setCali
   const isDefault = stAdj === 0 && adxThr === 25;
 
   return (
-    <section className="panel panel-corner anim-reveal" style={{ animationDelay: "0.54s" }}>
+    <section className="panel panel-corner anim-reveal flex h-full flex-col" style={{ animationDelay: "0.54s" }}>
       <header className="flex items-center gap-3 border-b border-ink-700/50 px-4 py-3">
         <div className="leading-none">
           <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
@@ -164,7 +164,7 @@ export default function TrendConsensusPanel({ state, tfKey, calibration, setCali
       </div>
 
       {/* votos de cada indicador */}
-      <div className="border-t border-ink-700/50">
+      <div className="flex-1 border-t border-ink-700/50">
         {cons.votes.map((v) => {
           const vm = DIR_META[v.dir];
           return (
