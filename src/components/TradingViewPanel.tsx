@@ -27,6 +27,22 @@ const TV_INTERVAL: Record<string, string> = {
 
 const OPEN_KEY = "liqradar:tvopen:v1";
 const STUDY_KEY = "liqradar:tvstudies:v1";
+const HEIGHT_KEY = "liqradar:tvheight:v1";
+
+// alturas predefinidas del gráfico (px)
+const HEIGHTS = [
+  { id: "S", px: 540, label: "Compacta" },
+  { id: "M", px: 720, label: "Normal" },
+  { id: "L", px: 920, label: "Grande" },
+] as const;
+
+function loadHeight(): (typeof HEIGHTS)[number]["id"] {
+  try {
+    const v = localStorage.getItem(HEIGHT_KEY);
+    if (v === "S" || v === "M" || v === "L") return v;
+  } catch { /* valor por defecto */ }
+  return "M";
+}
 
 function loadOpen(): boolean {
   try {
@@ -53,7 +69,17 @@ function loadStudies(): string[] {
 export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
   const [open, setOpen] = useState<boolean>(loadOpen);
   const [active, setActive] = useState<string[]>(loadStudies);
+  const [heightId, setHeightId] = useState<(typeof HEIGHTS)[number]["id"]>(loadHeight);
   const holderRef = useRef<HTMLDivElement>(null);
+
+  const heightPx = HEIGHTS.find((h) => h.id === heightId)?.px ?? 720;
+
+  // persistencia de la altura elegida
+  useEffect(() => {
+    try {
+      localStorage.setItem(HEIGHT_KEY, heightId);
+    } catch { /* sin almacenamiento */ }
+  }, [heightId]);
 
   const tvInterval = TV_INTERVAL[tfKey] ?? "5";
   const tvSymbol = `BINANCE:${symbol}`;
@@ -161,6 +187,24 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
           })}
         </div>
 
+        {/* tamaño del gráfico */}
+        <div className="flex items-stretch border border-ink-700 bg-ink-900/70" title="Tamaño del gráfico">
+          {HEIGHTS.map((h) => (
+            <button
+              key={h.id}
+              onClick={() => setHeightId(h.id)}
+              className={`px-2 py-1 font-mono text-[9.5px] font-bold uppercase tracking-wider transition-colors ${
+                heightId === h.id
+                  ? "bg-flare-400/15 text-flare-300"
+                  : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+              }`}
+              title={h.label}
+            >
+              {h.id}
+            </button>
+          ))}
+        </div>
+
         {/* abrir / cerrar panel */}
         <button
           onClick={() => setOpen((o) => !o)}
@@ -196,7 +240,11 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
             </div>
           </div>
           {/* el widget oficial se inyecta aquí */}
-          <div ref={holderRef} className="tradingview-widget-container relative z-10" style={{ height: 560 }} />
+          <div
+            ref={holderRef}
+            className="tradingview-widget-container relative z-10"
+            style={{ height: heightPx }}
+          />
         </div>
       )}
 
