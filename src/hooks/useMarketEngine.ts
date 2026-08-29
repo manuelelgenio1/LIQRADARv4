@@ -98,6 +98,7 @@ export function useMarketEngine() {
 
   // laboratorio de validación: track record de pools persistido
   const [poolLog, setPoolLog] = useState<PoolRecord[]>(loadPoolLog);
+  const [lastPoolSync, setLastPoolSync] = useState<number>(0);
   const stateRef = useRef<MarketState | null>(null);
   stateRef.current = state;
   // latencia real medida: hora local − hora del evento en el servidor
@@ -475,6 +476,7 @@ export function useMarketEngine() {
       const price = s.candles[s.candles.length - 1].c;
       const log = syncPools(s.meta.symbol, s.clusters, price, Date.now());
       setPoolLog(log);
+      setLastPoolSync(Date.now());
 
       // alerta: pool de liquidación recién barrido por el precio
       for (const r of log) {
@@ -522,6 +524,7 @@ export function useMarketEngine() {
     dismissToast,
     poolLog,
     poolStats,
+    lastPoolSync,
     sentiment,
     alertsOn,
     toggleAlerts,

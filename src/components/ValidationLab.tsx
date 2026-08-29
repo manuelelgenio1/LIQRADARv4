@@ -8,6 +8,7 @@ interface Props {
   stats: PoolStats;
   symbol: string;
   decimals: number;
+  lastSync: number;
 }
 
 function pct(v: number, digits = 0): string {
@@ -50,12 +51,18 @@ function StatusBadge({ r }: { r: PoolRecord }) {
   );
 }
 
-export default function ValidationLab({ log, stats, symbol, decimals }: Props) {
+export default function ValidationLab({ log, stats, symbol, decimals, lastSync }: Props) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  // evidencia de recolección: registros de este símbolo y sus extremos temporales
+  const symRecords = log.filter((r) => r.symbol === symbol);
+  const firstRec = symRecords.length ? symRecords[symRecords.length - 1] : null;
+  const lastRec = symRecords.length ? symRecords[0] : null;
+  const syncAgo = lastSync > 0 ? Math.max(0, Math.round((now - lastSync) / 1000)) : null;
 
   const rows = log.filter((r) => r.symbol === symbol).slice(0, 12);
   const delta = Number.isFinite(stats.hitRate) && Number.isFinite(stats.controlHitRate)
@@ -79,9 +86,24 @@ export default function ValidationLab({ log, stats, symbol, decimals }: Props) {
             ¿el precio barre los pools detectados? · track record persistido · {symbol}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* prueba visible de recolección: reloj de la última sincronización */}
+          <span
+            className={`flex items-center gap-1.5 border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${
+              syncAgo !== null && syncAgo <= 6
+                ? "border-long-500/50 bg-long-900/40 text-long-300"
+                : "border-ink-600 bg-ink-800 text-mist-500"
+            }`}
+            title="El laboratorio sincroniza con el mercado cada 3 segundos"
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${syncAgo !== null && syncAgo <= 6 ? "bg-long-400" : "bg-mist-600"}`}
+              style={{ animation: syncAgo !== null && syncAgo <= 6 ? "liveBlink 1.4s ease-out infinite" : "none" }}
+            />
+            {syncAgo === null ? "sync —" : `sync hace ${syncAgo}s`}
+          </span>
           <span className="border border-flare-400/40 bg-flare-400/10 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest text-flare-300">
-            {stats.total} registros
+            {symRecords.length} registros {symbol}
           </span>
           <span className="hidden border border-ink-600 bg-ink-800 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-mist-500 sm:block">
             hipótesis: barrido + reversión
@@ -211,6 +233,27 @@ export default function ValidationLab({ log, stats, symbol, decimals }: Props) {
       </div>
 
       <footer className="border-t border-ink-700/50 bg-ink-900/50 px-4 py-2.5">
+        {/* evidencia de que la recolección está activa y persistida */}
+        <div className="mb-2 flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[9px] uppercase tracking-widest">
+          <span className="flex items-center gap-1.5 text-mist-500">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#14c4a6" strokeWidth="2.4" strokeLinecap="round">
+              <path d="M20 6 L9 17 L4 12" />
+            </svg>
+            recolectando
+          </span>
+          <span className="text-mist-600">
+            primer registro: <b className="tick-num text-mist-400">{firstRec ? fmtAgo(firstRec.detectedAt, now) : "—"}</b>
+          </span>
+          <span className="text-mist-600">
+            último registro: <b className="tick-num text-mist-400">{lastRec ? fmtAgo(lastRec.detectedAt, now) : "—"}</b>
+          </span>
+          <span className="text-mist-600">
+            en localStorage: <b className="tick-num text-mist-400">{log.length}</b>
+          </span>
+          <span className="text-mist-600">
+            ciclo: <b className="tick-num text-mist-400">3 s</b>
+          </span>
+        </div>
         <p className="font-mono text-[9px] leading-relaxed text-mist-600">
           <span className="text-flare-300">◈</span> Metodología: cada pool se marca <b className="text-mist-400">barrido</b> cuando el precio
           toca su nivel (±0,12 %); 15 min después se clasifica <b className="text-long-300">reversó</b> (rebotó ≥0,4 %) o{" "}

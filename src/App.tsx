@@ -128,6 +128,7 @@ function Dashboard() {
           stats={engine.poolStats}
           symbol={engine.symbol}
           decimals={engine.meta.decimals}
+          lastSync={engine.lastPoolSync}
         />
 
         <footer className="flex flex-col items-center justify-between gap-2 border-t border-ink-700/50 pb-4 pt-5 font-mono text-[9.5px] uppercase tracking-[0.18em] text-mist-600 sm:flex-row">
