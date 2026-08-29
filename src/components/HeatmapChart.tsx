@@ -65,11 +65,11 @@ function loadZoom(tf: string): number {
 }
 
 // ---------- sistema de capas (overlays conmutables) ----------
-type LayerId = "clusters" | "lev" | "sessions" | "ema" | "st" | "cvdOv" | "voids";
+type LayerId = "clusters" | "lev" | "sessions" | "ema" | "st" | "cvdOv" | "voids" | "vwap";
 type Layers = Record<LayerId, boolean>;
 const LAYER_KEY = "liqradar:layers:v1";
 const DEFAULT_LAYERS: Layers = {
-  clusters: true, lev: true, sessions: true, ema: true, st: true, cvdOv: false, voids: true,
+  clusters: true, lev: true, sessions: true, ema: true, st: true, cvdOv: false, voids: true, vwap: true,
 };
 const LAYER_META: { id: LayerId; label: string; on: string; tip: string }[] = [
   { id: "clusters", label: "Clúster", on: "text-short-300", tip: "Líneas de los clústeres de liquidación detectados" },
