@@ -71,6 +71,8 @@ function Dashboard() {
         setPaused={engine.setPaused}
         source={engine.source}
         livePrices={engine.livePrices}
+        alertsOn={engine.alertsOn}
+        toggleAlerts={engine.toggleAlerts}
       />
       <TickerTape livePrices={engine.livePrices} paused={engine.paused} />
 
@@ -99,7 +101,7 @@ function Dashboard() {
             <ClusterList state={state} />
           </div>
           <div className="space-y-4 md:col-span-2 xl:col-span-4">
-            <FundingOIPanel state={state} />
+            <FundingOIPanel state={state} sentiment={engine.sentiment} />
             <DataQualityPanel state={state} />
           </div>
         </div>

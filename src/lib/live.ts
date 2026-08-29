@@ -135,6 +135,45 @@ export function depthToState(d: BookData) {
   return { bids: d.bids, asks: d.asks, imbalance: d.imbalance, spoofing: d.spoofing };
 }
 
+// ---------- sentimiento real: ratio long/short de cuentas y de top traders ----------
+export interface LongShortRatio {
+  ratio: number;      // cuentas long / cuentas short (global)
+  longPct: number;    // % de cuentas en long
+  topRatio: number;   // ratio de posiciones de los top traders
+}
+
+export async function fetchLongShortRatio(symbol: string): Promise<LongShortRatio | null> {
+  const [ra, rt] = await Promise.allSettled([
+    fetch(
+      `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=5m&limit=1`,
+      { signal: withTimeout(9000) }
+    ),
+    fetch(
+      `https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=1`,
+      { signal: withTimeout(9000) }
+    ),
+  ]);
+
+  let ratio = NaN, longPct = NaN, topRatio = NaN;
+  if (ra.status === "fulfilled" && ra.value.ok) {
+    const j = (await ra.value.json()) as { longShortRatio?: string; longAccount?: string }[];
+    if (Array.isArray(j) && j.length) {
+      ratio = Number(j[0].longShortRatio);
+      longPct = Number(j[0].longAccount) * 100;
+    }
+  }
+  if (rt.status === "fulfilled" && rt.value.ok) {
+    const j = (await rt.value.json()) as { longShortRatio?: string }[];
+    if (Array.isArray(j) && j.length) topRatio = Number(j[0].longShortRatio);
+  }
+  if (!Number.isFinite(ratio) && !Number.isFinite(topRatio)) return null;
+  return {
+    ratio: Number.isFinite(ratio) ? ratio : 1,
+    longPct: Number.isFinite(longPct) ? longPct : 50,
+    topRatio: Number.isFinite(topRatio) ? topRatio : Number.isFinite(ratio) ? ratio : 1,
+  };
+}
+
 // ---------- websocket de precios (miniTicker, todos los símbolos) ----------
 export function connectTickers(
   symbols: string[],

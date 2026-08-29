@@ -17,10 +17,13 @@ import {
   fetchKlines,
   fetchDepth,
   fetchFundingOi,
+  fetchLongShortRatio,
   toBinanceInterval,
   depthToState,
   type TickerInfo,
+  type LongShortRatio,
 } from "../lib/live";
+import { getIndicatorCfg, supertrendSeries } from "../lib/indicators";
 import {
   syncPools,
   computeStats,
@@ -88,6 +91,77 @@ export function useMarketEngine() {
   // latencia real medida: hora local − hora del evento en el servidor
   const wsLatencyRef = useRef<number | null>(null);
 
+  // sentimiento real (ratio long/short de cuentas y top traders)
+  const [sentiment, setSentiment] = useState<LongShortRatio | null>(null);
+
+  // ---- sistema de alertas (notificación + sonido) ----
+  const [alertsOn, setAlertsOn] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("liqradar:alerts:v1") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("liqradar:alerts:v1", alertsOn ? "1" : "0");
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [alertsOn]);
+  const alertsOnRef = useRef(alertsOn);
+  alertsOnRef.current = alertsOn;
+  const sweptIdsRef = useRef<Set<string>>(new Set());
+  const stDirRef = useRef<boolean | null>(null);
+  const audioRef = useRef<AudioContext | null>(null);
+
+  const beep = () => {
+    try {
+      if (!audioRef.current) {
+        const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctx) return;
+        audioRef.current = new Ctx();
+      }
+      const ctx = audioRef.current;
+      if (ctx.state === "suspended") void ctx.resume();
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, t);
+      osc.frequency.exponentialRampToValueAtTime(520, t + 0.18);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.08, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.24);
+    } catch {
+      /* sin audio */
+    }
+  };
+
+  const notify = (title: string, body: string) => {
+    if (!alertsOnRef.current) return;
+    beep();
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body, tag: title });
+      }
+    } catch {
+      /* sin notificaciones */
+    }
+  };
+
+  // al activar alertas, pedir permiso de notificación (gesto del usuario)
+  const toggleAlerts = () => {
+    const next = !alertsOn;
+    setAlertsOn(next);
+    if (next && "Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+  };
+
   const meta: SymbolMeta = useMemo(
     () => SYMBOLS.find((s) => s.symbol === symbol) ?? SYMBOLS[0],
     [symbol]
@@ -122,7 +196,11 @@ export function useMarketEngine() {
         if (cancelled) return;
         let st = marketFromKlines(m, tf, klines, seed);
         try {
-          const [depth, fo] = await Promise.allSettled([fetchDepth(symbol), fetchFundingOi(symbol)]);
+          const [depth, fo, ls] = await Promise.allSettled([
+            fetchDepth(symbol),
+            fetchFundingOi(symbol),
+            fetchLongShortRatio(symbol),
+          ]);
           if (cancelled) return;
           if (depth.status === "fulfilled") st = { ...st, ...depthToState(depth.value) };
           if (fo.status === "fulfilled" && fo.value) {
@@ -133,6 +211,7 @@ export function useMarketEngine() {
               oi: Number.isFinite(fo.value.oi) ? fo.value.oi : st.oi,
             };
           }
+          if (ls.status === "fulfilled" && ls.value) setSentiment(ls.value);
         } catch {
           /* libro/funding estimados por el modelo */
         }
@@ -212,15 +291,18 @@ export function useMarketEngine() {
 
     const foId = window.setInterval(async () => {
       try {
-        const f = await fetchFundingOi(symbol);
-        if (f) {
+        const [f, ls] = await Promise.allSettled([fetchFundingOi(symbol), fetchLongShortRatio(symbol)]);
+        const fov = f.status === "fulfilled" ? f.value : null;
+        if (fov) {
           setState((s) => ({
             ...s,
-            funding: f.funding,
-            fundingNextMs: Math.max(0, f.nextMs),
-            oi: Number.isFinite(f.oi) ? f.oi : s.oi,
+            funding: fov.funding,
+            fundingNextMs: Math.max(0, fov.nextMs),
+            oi: Number.isFinite(fov.oi) ? fov.oi : s.oi,
           }));
         }
+        const lsv = ls.status === "fulfilled" ? ls.value : null;
+        if (lsv) setSentiment(lsv);
       } catch {
         /* se mantienen las últimas métricas */
       }
@@ -259,18 +341,49 @@ export function useMarketEngine() {
     }
   }, [state.events, state.meta]);
 
-  // laboratorio: cada 3 s registra pools nuevos y actualiza su estado
-  // (barrido / expirado / resultado) con el precio vivo del mercado
+  // al cambiar de símbolo/temporalidad se reinicia la dirección de Supertrend
+  // para no disparar un giro falso al comparar contra el activo anterior
+  useEffect(() => {
+    stDirRef.current = null;
+  }, [symbol, tfKey]);
+
+  // laboratorio: cada 3 s registra pools nuevos, actualiza su estado
+  // (barrido / expirado / resultado) y dispara alertas de eventos clave
   useEffect(() => {
     if (paused || source === "connecting") return;
     const id = window.setInterval(() => {
       const s = stateRef.current;
       if (!s) return;
       const price = s.candles[s.candles.length - 1].c;
-      setPoolLog(syncPools(s.meta.symbol, s.clusters, price, Date.now()));
+      const log = syncPools(s.meta.symbol, s.clusters, price, Date.now());
+      setPoolLog(log);
+
+      // alerta: pool de liquidación recién barrido por el precio
+      for (const r of log) {
+        if (r.symbol !== s.meta.symbol || r.status !== "barrido" || r.isControl) continue;
+        if (sweptIdsRef.current.has(r.id)) continue;
+        sweptIdsRef.current.add(r.id);
+        const dir = r.side === "long" ? "longs" : "shorts";
+        notify(
+          `Pool de ${dir} barrido · ${s.meta.base}`,
+          `El precio tocó ${r.price.toFixed(s.meta.decimals)} — midiendo la reacción (reversión vs continuación).`
+        );
+      }
+
+      // alerta: giro del Supertrend en la temporalidad activa
+      const cfg = getIndicatorCfg(tfKey);
+      const st = supertrendSeries(s.candles, cfg.atr, cfg.stMult);
+      const up = st.up[st.up.length - 1];
+      if (stDirRef.current !== null && stDirRef.current !== up) {
+        notify(
+          `Supertrend ${up ? "ALCISTA" : "BAJISTA"} · ${s.meta.base}`,
+          `Giro de tendencia en ${tfKey} (ATR ${cfg.atr} × ${cfg.stMult}).`
+        );
+      }
+      stDirRef.current = up;
     }, 3000);
     return () => window.clearInterval(id);
-  }, [paused, source]);
+  }, [paused, source, tfKey]);
 
   const poolStats = useMemo(() => computeStats(poolLog, symbol), [poolLog, symbol]);
 
@@ -291,6 +404,9 @@ export function useMarketEngine() {
     dismissToast,
     poolLog,
     poolStats,
+    sentiment,
+    alertsOn,
+    toggleAlerts,
     symbols: SYMBOLS,
     timeframes: TIMEFRAMES,
   };

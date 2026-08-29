@@ -1,9 +1,12 @@
 import type { MarketState } from "../lib/market";
+import type { LongShortRatio } from "../lib/live";
 import { fmtCountdown, fmtPct, fmtUsd } from "../lib/format";
 
-export function FundingOIPanel({ state }: { state: MarketState }) {
-  const ls = state.longShortRatio;
-  const longPct = (ls / (1 + ls)) * 100;
+export function FundingOIPanel({ state, sentiment }: { state: MarketState; sentiment: LongShortRatio | null }) {
+  // si hay datos reales de Binance se muestran; si no, el valor del modelo
+  const real = sentiment != null;
+  const ls = real ? sentiment.ratio : state.longShortRatio;
+  const longPct = real ? sentiment.longPct : (ls / (1 + ls)) * 100;
 
   return (
     <section className="panel anim-reveal" style={{ animationDelay: "0.3s" }}>
@@ -51,7 +54,18 @@ export function FundingOIPanel({ state }: { state: MarketState }) {
         </div>
 
         <div className="mt-3 flex items-baseline justify-between">
-          <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">Ratio long/short</span>
+          <span className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">
+            Ratio long/short
+            <span
+              className={`border px-1 py-px text-[7.5px] font-bold ${
+                real
+                  ? "border-long-500/40 bg-long-900/50 text-long-300"
+                  : "border-ink-600 bg-ink-800 text-mist-500"
+              }`}
+            >
+              {real ? "REAL" : "MODELO"}
+            </span>
+          </span>
           <span className="tick-num font-mono text-[10px] font-semibold text-mist-300">{ls.toFixed(2)}</span>
         </div>
         <div className="mt-1.5 flex h-2 overflow-hidden bg-ink-800">
@@ -62,6 +76,19 @@ export function FundingOIPanel({ state }: { state: MarketState }) {
           <span className="text-long-300">longs {longPct.toFixed(0)}%</span>
           <span className="text-short-300">shorts {(100 - longPct).toFixed(0)}%</span>
         </div>
+
+        {real && (
+          <div className="mt-2.5 flex items-baseline justify-between border-t border-ink-700/40 pt-2">
+            <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">Top traders (posiciones)</span>
+            <span
+              className={`tick-num font-mono text-[10px] font-bold ${
+                sentiment.topRatio >= 1 ? "text-long-300" : "text-short-300"
+              }`}
+            >
+              {sentiment.topRatio.toFixed(2)} {sentiment.topRatio >= 1 ? "↑ long" : "↓ short"}
+            </span>
+          </div>
+        )}
       </div>
     </section>
   );

@@ -30,6 +30,8 @@ interface Props {
   setPaused: (p: boolean) => void;
   source: Source;
   livePrices: Record<string, TickerInfo>;
+  alertsOn: boolean;
+  toggleAlerts: () => void;
 }
 
 const SOURCE_CHIP: Record<Source, { t: string; c: string }> = {
@@ -38,7 +40,7 @@ const SOURCE_CHIP: Record<Source, { t: string; c: string }> = {
   connecting: { t: "CONECTANDO…", c: "border-ink-600 bg-ink-800 text-mist-400" },
 };
 
-export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused, setPaused, source, livePrices }: Props) {
+export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused, setPaused, source, livePrices, alertsOn, toggleAlerts }: Props) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -138,6 +140,37 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
               style={{ animation: paused ? "none" : "liveBlink 1.6s ease-out infinite" }}
             />
             {paused ? "Reanudar" : "En vivo"}
+          </button>
+
+          {/* alertas (notificación + sonido en giros de Supertrend y pools barridos) */}
+          <button
+            onClick={toggleAlerts}
+            className={`relative flex h-[34px] w-[34px] items-center justify-center border transition-all duration-200 ${
+              alertsOn
+                ? "border-flare-400/60 bg-flare-400/15 text-flare-300 hover:bg-flare-400/25"
+                : "border-ink-600 bg-ink-800 text-mist-500 hover:border-ink-600 hover:text-mist-300"
+            }`}
+            title={alertsOn ? "Alertas activadas (clic para silenciar)" : "Activar alertas de eventos"}
+            aria-pressed={alertsOn}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={alertsOn ? "origin-top" : ""}
+              style={alertsOn ? { animation: "radarSweep 2.2s ease-in-out infinite" } : undefined}
+            >
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+            </svg>
+            {alertsOn && (
+              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-flare-400" style={{ animation: "liveBlink 1.4s ease-out infinite" }} />
+            )}
           </button>
 
           {/* reloj UTC */}
