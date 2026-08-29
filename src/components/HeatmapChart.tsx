@@ -139,6 +139,20 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const [fullscreen, setFullscreen] = useState(false);
   const [chartH, setChartH] = useState(H);
   const offRef = useRef<HTMLCanvasElement | null>(null);
+  const [logScale, setLogScale] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("liqradar:logscale:v1") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("liqradar:logscale:v1", logScale ? "1" : "0");
+    } catch {
+      /* sin almacenamiento */
+    }
+  }, [logScale]);
 
   // preferencia de escalera de apalancamiento persistida
   useEffect(() => {
@@ -203,6 +217,22 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     return { start, yMin: vLo - pad, yMax: vHi + pad };
   }, [state.candles, visibleCount]);
 
+  // ---- mapeo precio↔píxel (lineal o logarítmico) compartido por canvas y tooltip ----
+  const scaleY = (p: number, plotTop: number, plotH: number) => {
+    if (logScale && view.yMin > 0 && p > 0) {
+      const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
+      return plotTop + ((lmax - Math.log(p)) / (lmax - lmin)) * plotH;
+    }
+    return plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
+  };
+  const scalePrice = (py: number, plotTop: number, plotH: number) => {
+    if (logScale && view.yMin > 0) {
+      const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
+      return Math.exp(lmax - ((py - plotTop) / plotH) * (lmax - lmin));
+    }
+    return view.yMax - ((py - plotTop) / plotH) * (view.yMax - view.yMin);
+  };
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -216,11 +246,20 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     return () => ro.disconnect();
   }, [fullscreen]);
 
-  // ESC cierra la pantalla completa + bloquea el scroll del fondo
+  // Atajos en pantalla completa: ESC sale · +/− zoom · ←/→ timeframe · L escala log
   useEffect(() => {
     if (!fullscreen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setFullscreen(false);
+      else if (e.key === "+" || e.key === "=")
+        setVisibleCount((v) => Math.max(MIN_VIS, v - Math.max(1, Math.round(v * 0.15))));
+      else if (e.key === "-" || e.key === "_")
+        setVisibleCount((v) => Math.min(CANDLE_COUNT, v + Math.max(1, Math.round(v * 0.15))));
+      else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const i = timeframes.findIndex((t) => t.key === tfKey);
+        const n = timeframes[(i + (e.key === "ArrowRight" ? 1 : -1) + timeframes.length) % timeframes.length];
+        if (n) setTfKey(n.key);
+      } else if (e.key === "l" || e.key === "L") setLogScale((v) => !v);
     };
     window.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
@@ -228,7 +267,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
     };
-  }, [fullscreen]);
+  }, [fullscreen, timeframes, tfKey, setTfKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -247,7 +286,8 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const plotBottom = chartH - TIME_H - SUB_H - 12;
     const plotH = plotBottom - plotTop;
     const lastC = candles[CANDLE_COUNT - 1].c;
-    const y = (p: number) => plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
+    const y = (p: number) => scaleY(p, plotTop, plotH);
+    const priceAt = (py: number) => scalePrice(py, plotTop, plotH);
     const cellW = plotW / visibleCount;
 
     // tinte de fondo según el consenso de tendencia
@@ -262,12 +302,13 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     ctx.fillStyle = tint;
     ctx.fillRect(0, plotTop, plotW, plotH);
 
-    // rejilla horizontal + escala de precios
+    // rejilla horizontal + escala de precios (espaciado uniforme en pantalla;
+    // en escala log los precios resultan logarítmicos)
     ctx.font = "10px 'IBM Plex Mono', monospace";
     ctx.textBaseline = "middle";
     for (let g = 0; g <= 6; g++) {
-      const p = view.yMin + ((view.yMax - view.yMin) * g) / 6;
-      const gy = y(p);
+      const gy = plotTop + (plotH * g) / 6;
+      const p = priceAt(gy);
       ctx.strokeStyle = "rgba(37,54,80,0.4)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -295,9 +336,9 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const img = octx.createImageData(visibleCount, HEAT_ROWS);
     const px = img.data;
     const spanFull = pMax - pMin || 1;
-    const spanView = view.yMax - view.yMin || 1;
     for (let r = 0; r < HEAT_ROWS; r++) {
-      const price = view.yMax - ((r + 0.5) / HEAT_ROWS) * spanView;
+      // cada fila de píxeles se mapea a su precio (respeta la escala log)
+      const price = priceAt(plotTop + ((r + 0.5) / HEAT_ROWS) * plotH);
       const fb = ((price - pMin) / spanFull) * (HEAT_BINS - 1);
       const b0 = Math.max(0, Math.min(HEAT_BINS - 1, Math.floor(fb)));
       const b1 = Math.max(0, Math.min(HEAT_BINS - 1, Math.ceil(fb)));
@@ -376,36 +417,60 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
 
     // ---- escalera de apalancamiento (liq. ≈ precio × (1 ± 1/lev)) ----
-    for (const lev of LEVS) {
-      if (!levOn[lev]) continue;
-      const pctDist = 100 / lev;
-      const sides = [
-        { price: lastC * (1 - 1 / lev), col: "45,224,192", tag: `x${lev} ${pctDist.toFixed(0)}% L` },
-        { price: lastC * (1 + 1 / lev), col: "255,93,126", tag: `x${lev} ${pctDist.toFixed(0)}% S` },
-      ];
-      const alpha = LEV_ALPHA[lev];
-      for (const s of sides) {
-        const ly2 = y(s.price);
-        if (ly2 < plotTop + 3 || ly2 > plotBottom - 3) continue;
-        ctx.strokeStyle = `rgba(${s.col},${alpha})`;
-        ctx.lineWidth = 1.1;
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, ly2);
-        ctx.lineTo(plotW, ly2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.lineWidth = 1;
-        const tw = ctx.measureText(s.tag).width;
-        const bx = plotW - tw - 18;
-        ctx.fillStyle = "rgba(7,12,22,0.92)";
-        ctx.fillRect(bx, ly2 - 8, tw + 14, 15);
-        ctx.strokeStyle = `rgba(${s.col},${Math.min(1, alpha + 0.2)})`;
-        ctx.strokeRect(bx + 0.5, ly2 - 7.5, tw + 13, 14);
-        ctx.fillStyle = `rgba(${s.col},${Math.min(1, alpha + 0.25)})`;
-        ctx.textAlign = "left";
-        ctx.fillText(s.tag, bx + 7, ly2 + 0.5);
-      }
+    // Cada lado dibuja su línea en el precio real y apila las etiquetas en una
+    // columna alineada a la derecha, resolviendo solapes para que nunca se pisen.
+    {
+      const TAG_W = 84, TAG_H = 15, GAP = 2;
+      const colX = plotW - TAG_W - 6;
+      type LevTag = { lineY: number; tagY: number; col: string; tag: string; alpha: number };
+      const buildSide = (sign: 1 | -1, col: string, suffix: string): LevTag[] => {
+        const out: LevTag[] = [];
+        for (const lev of LEVS) {
+          if (!levOn[lev]) continue;
+          const lineY = y(lastC * (1 + sign / lev));
+          if (lineY < plotTop + 6 || lineY > plotBottom - 6) continue;
+          const pd = 100 / lev;
+          const pdStr = pd < 10 ? pd.toFixed(1) : pd.toFixed(0);
+          out.push({ lineY, tagY: lineY, col, alpha: LEV_ALPHA[lev], tag: `x${lev} · ${pdStr}%${suffix}` });
+        }
+        out.sort((a, b) => a.lineY - b.lineY);
+        for (let i = 1; i < out.length; i++) {
+          if (out[i].tagY - out[i - 1].tagY < TAG_H + GAP) out[i].tagY = out[i - 1].tagY + TAG_H + GAP;
+        }
+        return out;
+      };
+      const drawSide = (tags: LevTag[]) => {
+        for (const t of tags) {
+          // línea de liquidación (posición real)
+          ctx.strokeStyle = `rgba(${t.col},${t.alpha})`;
+          ctx.lineWidth = 1.1;
+          ctx.setLineDash([2, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, t.lineY);
+          ctx.lineTo(plotW, t.lineY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineWidth = 1;
+          // conector desde la línea hasta la etiqueta (si fue desplazada)
+          ctx.strokeStyle = `rgba(${t.col},${t.alpha * 0.7})`;
+          ctx.beginPath();
+          ctx.moveTo(plotW - 2, t.lineY);
+          ctx.lineTo(colX + TAG_W, t.tagY);
+          ctx.stroke();
+          // etiqueta en columna alineada
+          ctx.fillStyle = "rgba(7,12,22,0.92)";
+          ctx.fillRect(colX, t.tagY - TAG_H / 2, TAG_W, TAG_H);
+          ctx.strokeStyle = `rgba(${t.col},${Math.min(1, t.alpha + 0.2)})`;
+          ctx.strokeRect(colX + 0.5, t.tagY - TAG_H / 2 + 0.5, TAG_W - 1, TAG_H - 1);
+          ctx.fillStyle = `rgba(${t.col},${Math.min(1, t.alpha + 0.3)})`;
+          ctx.textAlign = "left";
+          ctx.fillText(t.tag, colX + 7, t.tagY + 0.5);
+        }
+      };
+      ctx.font = "600 9.5px 'IBM Plex Mono', monospace";
+      drawSide(buildSide(-1, "45,224,192", " L"));
+      drawSide(buildSide(1, "255,93,126", " S"));
+      ctx.font = "10px 'IBM Plex Mono', monospace";
     }
 
     // velas (solo visibles)
@@ -709,7 +774,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd]);
+  }, [state, width, chartH, hover, ind, osc, tfMin, cfg, view, visibleCount, levOn, realCvd, logScale, scaleY, scalePrice]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -719,7 +784,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const plotBottom = chartH - TIME_H - SUB_H - 12;
     const vIdx = Math.min(visibleCount - 1, Math.max(0, Math.floor((x / plotW) * visibleCount)));
     const idx = view.start + vIdx;
-    const price = view.yMax - ((yy - PAD_T) / (plotBottom - PAD_T)) * (view.yMax - view.yMin);
+    const price = scalePrice(yy, PAD_T, plotBottom - PAD_T);
     const bin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((price - state.pMin) / (state.pMax - state.pMin)) * (HEAT_BINS - 1))));
     // mismo máximo de ventana que usa el canvas, para que el % del tooltip
     // coincida con la intensidad realmente dibujada al hacer zoom
@@ -834,6 +899,23 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             ))}
           </div>
 
+          {/* escala lineal / logarítmica */}
+          <div className="flex border border-ink-700 bg-ink-900/70" title="Escala del eje de precios (útil en 1D/1W)">
+            {(["lin", "log"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setLogScale(s === "log")}
+                className={`px-2 py-1 font-mono text-[10px] font-semibold uppercase transition-colors ${
+                  (s === "log") === logScale
+                    ? "bg-mist-200/15 text-mist-100"
+                    : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+
           {/* control de zoom */}
           <div className="flex items-stretch border border-ink-700 bg-ink-900/70" title="Nivel de zoom sobre la ventana de velas">
             <button
@@ -923,6 +1005,17 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       )}
 
       <div ref={wrapRef} className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>
+        {fullscreen && (
+          <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 border border-ink-700 bg-ink-900/90 px-3 py-1.5 font-mono text-[9px] uppercase tracking-widest text-mist-500 backdrop-blur-sm">
+            <span><b className="text-mist-300">rueda</b> zoom</span>
+            <span className="text-ink-600">·</span>
+            <span><b className="text-mist-300">← →</b> timeframe</span>
+            <span className="text-ink-600">·</span>
+            <span><b className="text-mist-300">L</b> escala log</span>
+            <span className="text-ink-600">·</span>
+            <span><b className="text-mist-300">ESC</b> salir</span>
+          </div>
+        )}
         <canvas
           ref={canvasRef}
           style={{ width: "100%", height: fullscreen ? "100%" : H, display: "block", cursor: "crosshair" }}
