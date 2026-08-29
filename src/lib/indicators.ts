@@ -216,11 +216,13 @@ export function classifyTrend(emaFast: number[], emaSlow: number[], tfMinutes: n
   const f = emaFast[n - 1];
   const s = emaSlow[n - 1] || 1;
   const rel = (f - s) / Math.abs(s);
-  const thr = Math.min(0.03, 0.0006 * Math.sqrt(tfMinutes / 5));
+  // umbral calibrado por temporalidad; si tfMinutes no es finito se usa 5m
+  const tf = Number.isFinite(tfMinutes) && tfMinutes > 0 ? tfMinutes : 5;
+  const thr = Math.min(0.03, 0.0006 * Math.sqrt(tf / 5));
   let dir: TrendDir = "lateral";
   if (rel > thr) dir = "alcista";
   else if (rel < -thr) dir = "bajista";
-  const strength = Math.min(1, Math.abs(rel) / (thr * 3));
+  const strength = Math.max(0, Math.min(1, Number.isFinite(rel) ? Math.abs(rel) / (thr * 3) : 0));
   return { dir, strength };
 }
 
@@ -260,7 +262,8 @@ function buildConsensus(
   if (!n) return { votes, score: 0, dir: "lateral", strength: 0 };
 
   const last = <T,>(arr: T[]): T => arr[arr.length - 1];
-  const thr = Math.min(0.03, 0.0006 * Math.sqrt(tfMinutes / 5));
+  const tf = Number.isFinite(tfMinutes) && tfMinutes > 0 ? tfMinutes : 5;
+  const thr = Math.min(0.03, 0.0006 * Math.sqrt(tf / 5));
 
   // 1 · cruce de EMAs
   const f = last(b.emaFast);
@@ -316,13 +319,16 @@ function buildConsensus(
     strength: strong ? Math.min(1, a / 50) : (20 - a) / 20,
   });
 
+  const fin = (x: number, fb = 0): number => (Number.isFinite(x) ? x : fb);
   const dirVal = (d: TrendDir) => (d === "alcista" ? 1 : d === "bajista" ? -1 : 0);
-  const wSum = votes.reduce((x, v) => x + v.weight, 0);
+  // fuerzas de voto siempre finitas y acotadas a [0,1]
+  for (const v of votes) v.strength = Math.max(0, Math.min(1, fin(v.strength)));
+  const wSum = votes.reduce((x, v) => x + v.weight, 0) || 1;
   const raw =
     votes.reduce((x, v) => x + v.weight * dirVal(v.dir) * (0.35 + 0.65 * v.strength), 0) / wSum;
-  const score = Math.max(-1, Math.min(1, raw));
+  const score = Math.max(-1, Math.min(1, fin(raw)));
   const dir: TrendDir = score > 0.22 ? "alcista" : score < -0.22 ? "bajista" : "lateral";
-  return { votes, score, dir, strength: Math.min(1, Math.abs(score) * 1.4) };
+  return { votes, score, dir, strength: Math.max(0, Math.min(1, Math.abs(score) * 1.4)) };
 }
 
 // ---------- bundle completo ----------
