@@ -371,11 +371,22 @@ export function useMarketEngine() {
   }, []);
 
   // ---- CONFLUENCIA MULTI-TF: tendencia en 5 temporalidades del símbolo ----
+  const calibrationRef = useRef(calibration);
+  calibrationRef.current = calibration;
   useEffect(() => {
     if (source === "connecting") return;
     let cancelled = false;
     const tfs = ["5m", "15m", "1H", "4H", "1D"];
     const m = SYMBOLS.find((x) => x.symbol === symbol) ?? SYMBOLS[0];
+    const cfgFor = (tf: string) => {
+      const base = getIndicatorCfg(tf);
+      const stAdj = calibrationRef.current.stAdj;
+      return {
+        ...base,
+        stMult: +(base.stMult * (1 + stAdj)).toFixed(2),
+        adxThr: calibrationRef.current.adxThr,
+      };
+    };
     const load = async () => {
       if (source === "live") {
         const res = await Promise.allSettled(
@@ -383,7 +394,7 @@ export function useMarketEngine() {
           const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
           // 300 velas para sembrar bien EMA/ADX antes de leer el consenso
           const kl = await fetchKlines(symbol, toBinanceInterval(tf), 300);
-          const ind = computeIndicators(kl, getIndicatorCfg(tf), minutes);
+          const ind = computeIndicators(kl, cfgFor(tf), minutes);
           return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
         })        );
         if (cancelled) return;
@@ -397,7 +408,7 @@ export function useMarketEngine() {
         const items = tfs.map((tf) => {
           const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
           const sim = generateMarket(m, minutes, hashStr(symbol + tf) + 7);
-          const ind = computeIndicators(sim.candles, getIndicatorCfg(tf), minutes);
+          const ind = computeIndicators(sim.candles, cfgFor(tf), minutes);
           return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
         });
         setConfluence(items);
