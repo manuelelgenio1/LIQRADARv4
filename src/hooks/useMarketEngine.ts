@@ -296,6 +296,8 @@ export function useMarketEngine() {
   // ---- CVD REAL: stream aggTrade del símbolo activo (solo en vivo) ----
   useEffect(() => {
     if (source !== "live") return;
+    // al cambiar de símbolo se descarta el delta pendiente del stream anterior
+    tradeDeltaRef.current = 0;
     return connectTrades(symbol, (d) => {
       if (!pausedRef.current) tradeDeltaRef.current += d;
       if (!realCvdRef.current) {
@@ -337,23 +339,36 @@ export function useMarketEngine() {
 
   // ---- CONFLUENCIA MULTI-TF: tendencia en 5 temporalidades del símbolo ----
   useEffect(() => {
-    if (source !== "live") return;
+    if (source === "connecting") return;
     let cancelled = false;
     const tfs = ["5m", "15m", "1H", "4H", "1D"];
+    const m = SYMBOLS.find((x) => x.symbol === symbol) ?? SYMBOLS[0];
     const load = async () => {
-      const res = await Promise.allSettled(
-        tfs.map(async (tf) => {
+      if (source === "live") {
+        const res = await Promise.allSettled(
+          tfs.map(async (tf) => {
+            const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
+            const kl = await fetchKlines(symbol, toBinanceInterval(tf), CANDLE_COUNT);
+            const ind = computeIndicators(kl, getIndicatorCfg(tf), minutes);
+            return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
+          })
+        );
+        if (cancelled) return;
+        const items = res
+          .filter((r): r is PromiseFulfilledResult<{ tf: string; dir: TrendDir; strength: number }> => r.status === "fulfilled")
+          .map((r) => r.value);
+        if (items.length) setConfluence(items);
+      } else {
+        // modo simulado: velas sintéticas deterministas por símbolo+tf
+        if (cancelled) return;
+        const items = tfs.map((tf) => {
           const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
-          const kl = await fetchKlines(symbol, toBinanceInterval(tf), CANDLE_COUNT);
-          const ind = computeIndicators(kl, getIndicatorCfg(tf), minutes);
+          const sim = generateMarket(m, minutes, hashStr(symbol + tf) + 7);
+          const ind = computeIndicators(sim.candles, getIndicatorCfg(tf), minutes);
           return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
-        })
-      );
-      if (cancelled) return;
-      const items = res
-        .filter((r): r is PromiseFulfilledResult<{ tf: string; dir: TrendDir; strength: number }> => r.status === "fulfilled")
-        .map((r) => r.value);
-      if (items.length) setConfluence(items);
+        });
+        setConfluence(items);
+      }
     };
     load();
     const id = window.setInterval(load, 60_000);
@@ -479,6 +494,7 @@ export function useMarketEngine() {
       setLastPoolSync(Date.now());
 
       // alerta: pool de liquidación recién barrido por el precio
+      if (sweptIdsRef.current.size > 400) sweptIdsRef.current.clear();
       for (const r of log) {
         if (r.symbol !== s.meta.symbol || r.status !== "barrido" || r.isControl) continue;
         if (sweptIdsRef.current.has(r.id)) continue;
