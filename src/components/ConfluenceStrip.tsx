@@ -7,6 +7,7 @@ interface Props {
   symbol: string;
   activeTf?: string;
   updatedAt?: number; // timestamp de la última actualización (frescura)
+  market?: "perp" | "spot"; // fuente de las velas (transparencia tras el cambio PERP/SPOT)
 }
 
 const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar: string }> = {
@@ -15,7 +16,7 @@ const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar
   lateral: { label: "LATERAL", dot: "bg-mist-500", text: "text-mist-400", bar: "#5f7396" },
 };
 
-export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedAt = 0 }: Props) {
+export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedAt = 0, market = "perp" }: Props) {
   // reloj de frescura ("hace Xs")
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -35,8 +36,13 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
   const ago = updatedAt > 0 ? Math.max(0, Math.round((now - updatedAt) / 1000)) : null;
 
   // detectar cambios de dirección reales para señalarlos con un pulso preciso
-  // (el color cambia al instante; el pulso anuncia QUE cambió, sin fundirlo)
+  // (el color cambia al instante; el pulso anuncia QUE cambió, sin fundirlo).
+  // IMPORTANTE: el timer vive en un ref y NO se cancela en el cleanup — la
+  // confluencia recibe una referencia nueva en cada tick del mercado, así que
+  // un cleanup que cancelara el timeout impediría que el pulso se reseteara
+  // jamás (tras el primer pulso, ningún cambio volvería a animarse).
   const prevDirs = useRef<Record<string, TrendDir>>({});
+  const pulseTimer = useRef<number | null>(null);
   const [pulsing, setPulsing] = useState<Set<string>>(new Set());
   useEffect(() => {
     const changed = new Set<string>();
@@ -47,10 +53,23 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
     }
     if (changed.size) {
       setPulsing(changed);
-      const t = window.setTimeout(() => setPulsing(new Set()), 750);
-      return () => window.clearTimeout(t);
+      if (pulseTimer.current) window.clearTimeout(pulseTimer.current);
+      pulseTimer.current = window.setTimeout(() => setPulsing(new Set()), 900);
     }
   }, [confluence]);
+  useEffect(
+    () => () => {
+      if (pulseTimer.current) window.clearTimeout(pulseTimer.current);
+    },
+    []
+  );
+
+  // al cambiar de símbolo no comparar contra las tendencias del activo
+  // anterior (el chip pulsaría en falso: son mercados distintos, no un giro)
+  useEffect(() => {
+    prevDirs.current = {};
+    setPulsing(new Set());
+  }, [symbol]);
 
   return (
     <section className="panel anim-reveal" style={{ animationDelay: "0.02s" }}>
@@ -64,6 +83,20 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
             Confluencia multi-TF
           </span>
           <span className="font-mono text-[9px] uppercase tracking-widest text-mist-600">{symbol}</span>
+          <span
+            className={`border px-1.5 py-px font-mono text-[8px] font-bold uppercase tracking-widest ${
+              market === "perp"
+                ? "border-long-500/40 bg-long-900/40 text-long-300"
+                : "border-mist-500/40 bg-ink-800 text-mist-400"
+            }`}
+            title={
+              market === "perp"
+                ? "Tendencias calculadas sobre velas del PERPETUO de Binance Futuros (misma fuente que el radar)"
+                : "Tendencias calculadas sobre velas del mercado SPOT"
+            }
+          >
+            {market}
+          </span>
         </div>
 
         {/* contadores de dirección */}

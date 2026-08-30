@@ -107,6 +107,7 @@ function Dashboard() {
           symbol={engine.symbol}
           activeTf={engine.tfKey}
           updatedAt={engine.confluenceAt}
+          market={engine.market}
         />
 
         {/* señal integrada del radar (sesgo + convicción + contribuciones) */}
