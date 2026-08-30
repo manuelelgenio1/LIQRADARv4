@@ -50,9 +50,26 @@ export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibratio
   const cons = ind.consensus;
   const mtf = mtfAdjust(cons, confluence);
   const meta = DIR_META[cons.dir];
-  const angle = cons.score * 82;
+  // La aguja usa la convicción AJUSTADA por MTF (con signo), igual que el %
+  // mostrado, para que aguja y convicción siempre coincidan.
+  const angle = Math.sign(cons.score || (cons.dir === "alcista" ? 1 : cons.dir === "bajista" ? -1 : 0)) * mtf.strength * 82;
   const bullishVotes = cons.votes.filter((v) => v.dir === "alcista").length;
   const bearishVotes = cons.votes.filter((v) => v.dir === "bajista").length;
+
+  // ---- valores subyacentes de cada indicador (transparencia del consenso) ----
+  const n = ind.emaFast.length - 1;
+  const lastC = state.candles[state.candles.length - 1].c;
+  const emaGap = ind.emaSlow[n] !== 0 ? ((ind.emaFast[n] - ind.emaSlow[n]) / ind.emaSlow[n]) * 100 : 0;
+  const histNow = ind.hist[n];
+  const rsiNow = ind.rsi[n];
+  const stDist = lastC > 0 ? ((lastC - ind.st[n]) / lastC) * 100 : 0;
+  const VALUE_OF: Record<string, string> = {
+    "Cruce EMA": `Δ ${emaGap >= 0 ? "+" : ""}${emaGap.toFixed(2)}%`,
+    "MACD": `hist ${histNow >= 0 ? "+" : ""}${histNow.toFixed(2)}`,
+    "RSI": `rsi ${rsiNow.toFixed(0)}`,
+    "Supertrend": `${stDist >= 0 ? "+" : ""}${stDist.toFixed(2)}% del ST`,
+    "ADX": `+DI ${ind.pdi[n].toFixed(0)} / −DI ${ind.mdi[n].toFixed(0)}`,
+  };
 
   // ---- lecturas de precisión ----
   const adxNow = ind.adx[ind.adx.length - 1] ?? 0;
@@ -143,18 +160,23 @@ export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibratio
         </div>
       </div>
 
-      {/* votos de cada indicador */}
+      {/* votos de cada indicador — con su valor subyacente y peso */}
       <div className="flex-1 border-t border-ink-700/50">
         {cons.votes.map((v) => {
           const vm = DIR_META[v.dir];
+          const val = VALUE_OF[v.name] ?? v.note;
           return (
             <div
               key={v.name}
+              title={`${v.name} · nota: ${v.note} · valor: ${val} · peso ×${v.weight}`}
               className="group flex items-center gap-3 border-b border-ink-700/25 px-4 py-[7px] transition-colors last:border-b-0 hover:bg-ink-750/50"
             >
-              <span className="w-[86px] shrink-0 font-mono text-[10px] font-semibold text-mist-300">{v.name}</span>
-              <span className="w-[84px] shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-600">{v.note}</span>
-              <span className={`flex w-[72px] shrink-0 items-center justify-center gap-1 border px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider ${vm.chip}`}>
+              <span className="w-[74px] shrink-0">
+                <span className="block font-mono text-[10px] font-semibold leading-tight text-mist-300">{v.name}</span>
+                <span className="block font-mono text-[7.5px] uppercase tracking-wider text-mist-600">peso ×{v.weight}</span>
+              </span>
+              <span className="tick-num w-[86px] shrink-0 font-mono text-[9px] text-mist-400">{val}</span>
+              <span className={`flex w-[68px] shrink-0 items-center justify-center gap-1 border px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider ${vm.chip}`}>
                 <DirArrow dir={v.dir} />
                 {vm.label}
               </span>
