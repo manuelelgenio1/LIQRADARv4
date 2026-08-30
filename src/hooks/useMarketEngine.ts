@@ -428,10 +428,12 @@ export function useMarketEngine() {
     };
     const load = async () => {
       if (source === "live") {
+        const fut = marketRef.current === "perp";
         const res = await Promise.allSettled(
           tfs.map(async (tf) => {
             const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
-            const kl = await fetchKlines(symbol, toBinanceInterval(tf), WARMUP_COUNT);
+            // misma fuente (PERP/SPOT) que el resto del radar
+            const kl = await fetchKlines(symbol, toBinanceInterval(tf), WARMUP_COUNT, fut);
             const ind = computeIndicators(kl, cfgFor(tf), minutes);
             return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
           })
@@ -468,7 +470,7 @@ export function useMarketEngine() {
       window.clearInterval(id);
       reloadConfluenceRef.current = () => {};
     };
-  }, [source, symbol]);
+  }, [source, symbol, market]);
 
   // al mover los sliders de calibración, recalcular la confluencia sin
   // esperar al intervalo de 60 s (con debounce para no saturar la API)
