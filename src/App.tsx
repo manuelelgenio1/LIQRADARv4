@@ -156,7 +156,12 @@ function Dashboard() {
             />
           </div>
           <div className="md:col-span-2 xl:col-span-4">
-            <MarketMakerPanel state={state} />
+            <MarketMakerPanel
+              state={state}
+              ind={ind}
+              cfg={cfg}
+              confluence={mergedConfluence}
+            />
           </div>
         </div>
 

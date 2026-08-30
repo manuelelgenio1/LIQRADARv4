@@ -1,32 +1,108 @@
 import type { MarketState } from "../lib/market";
+import type { IndicatorBundle, IndicatorCfg, TrendDir } from "../lib/indicators";
+import { adxThrOf } from "../lib/indicators";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
-interface Props { state: MarketState; }
+interface Props {
+  state: MarketState;
+  ind: IndicatorBundle;
+  cfg: IndicatorCfg;
+  confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
+}
 
 const PHASES = [
-  { n: "01", t: "Acumulación", d: "El precio comprime en rango mientras se absorben órdenes minoristas." },
-  { n: "02", t: "Barrido de liquidez", d: "Stop-hunt hacia el clúster objetivo para llenar órdenes institucionales." },
-  { n: "03", t: "Reversión", d: "Con la liquidez capturada, el precio revierte con volumen direccional." },
+  { n: "01", t: "Acumulación", d: "El objetivo está lejos del precio: el mercado comprime y construye posición." },
+  { n: "02", t: "Barrido", d: "El precio se acerca al clúster: stop-hunt en curso para capturar liquidez." },
+  { n: "03", t: "Reversión", d: "Objetivo al alcance: la liquidez se captura y el precio tiende a revertir." },
 ];
 
-export default function MarketMakerPanel({ state }: Props) {
+interface Rung {
+  id: string;
+  price: number;
+  side: "long" | "short";
+  sizeUsd: number;
+  leverage: string;
+  isTarget: boolean;
+  isSpot: boolean;
+}
+
+export default function MarketMakerPanel({ state, ind, cfg, confluence }: Props) {
   const cur = state.candles[state.candles.length - 1].c;
   const target = state.clusters[0];
-
   if (!target) return null;
 
-  const dist = ((target.price - cur) / cur) * 100;
+  const span = state.pMax - state.pMin || 1;
+  const distAbs = Math.abs(target.price - cur);
+  const distPct = ((target.price - cur) / cur) * 100;
   const up = target.price > cur;
-  const confidence = Math.round(38 + target.strength * 52);
-  const phase = Math.abs(dist) < 0.55 ? 2 : Math.abs(dist) < 1.4 ? 1 : 0;
   const col = up ? "#ff5d7e" : "#2de0c0";
+
+  // Fase RELATIVA al rango visible (no umbrales absolutos): escala con la temporalidad
+  const rel = distAbs / span;
+  const phase = rel < 0.12 ? 2 : rel < 0.35 ? 1 : 0;
+
+  // ---- escalera de liquidez: los 7 clústeres más cercanos (ambos lados) ----
+  const near = state.clusters.slice(0, 7);
+  const rungs: Rung[] = near.map((c) => ({
+    id: c.id,
+    price: c.price,
+    side: c.side,
+    sizeUsd: c.sizeUsd,
+    leverage: c.leverage,
+    isTarget: c.id === target.id,
+    isSpot: false,
+  }));
+  rungs.push({ id: "spot", price: cur, side: up ? "short" : "long", sizeUsd: 0, leverage: "", isTarget: false, isSpot: true });
+  // ordenar por precio: arriba = más caro
+  rungs.sort((a, b) => b.price - a.price);
+  const hi = rungs[0].price;
+  const lo = rungs[rungs.length - 1].price;
+  const rungSpan = hi - lo || 1;
+  const posOf = (p: number) => ((hi - p) / rungSpan) * 100; // % desde arriba
+
+  // ---- factores de probabilidad (transparentes, derivados de datos reales) ----
+  const thr = adxThrOf(cfg);
+  const adxNow = ind.adx[ind.adx.length - 1] ?? 0;
+  // 1 · fuerza del clúster objetivo (qué tan denso es el calor en ese nivel)
+  const fClu = target.strength;
+  // 2 · régimen ADX: una tendencia fuerte empuja el barrido; un rango lo frena
+  const fAdx = adxNow >= thr ? Math.min(1, adxNow / 50) : (adxNow / thr) * 0.4;
+  // 3 · confluencia MTF: cuántos TFs superiores apuntan en la dirección del barrido
+  let fMtf: number | null = null;
+  let mtfAgree = 0, mtfTotal = 0;
+  if (confluence && confluence.length) {
+    const want: TrendDir = up ? "alcista" : "bajista";
+    const dirs = confluence.filter((c) => c.dir !== "lateral");
+    mtfTotal = dirs.length;
+    mtfAgree = dirs.filter((c) => c.dir === want).length;
+    fMtf = mtfTotal > 0 ? mtfAgree / mtfTotal : null;
+  }
+  const factors: { label: string; v: number; bar: string; note: string }[] = [
+    { label: "Fuerza del clúster", v: fClu, bar: col, note: "densidad de liquidez en el nivel objetivo" },
+    { label: "Régimen ADX", v: fAdx, bar: "#ffb224", note: adxNow >= thr ? `tendencia fuerte (${adxNow.toFixed(0)})` : `rango (${adxNow.toFixed(0)})` },
+    ...(fMtf != null
+      ? [{ label: "Confluencia MTF", v: fMtf, bar: "#8fa3c4", note: `${mtfAgree}/${mtfTotal} TFs a favor` }]
+      : []),
+  ];
+  // sesgo combinado (media simple, claramente etiquetado como derivado)
+  const bias = factors.reduce((s, f) => s + f.v, 0) / factors.length;
+
+  const spotTop = posOf(cur);
 
   return (
     <section className="panel panel-corner anim-reveal flex h-full flex-col" style={{ animationDelay: "0.42s" }}>
       <header className="flex items-center gap-3 border-b border-ink-700/50 px-4 py-3">
         <div className="leading-none">
-          <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Market maker path</h2>
-          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">ruta estimada de liquidez</p>
+          <h2 className="flex items-center gap-2 font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
+            Market maker path
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: col, animation: "liveBlink 1.5s ease-out infinite" }}
+            />
+          </h2>
+          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
+            ruta de liquidez · objetivo = pool más cercano
+          </p>
         </div>
         <span
           className="ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest"
@@ -36,33 +112,76 @@ export default function MarketMakerPanel({ state }: Props) {
         </span>
       </header>
 
-      <div className="grid flex-1 grid-cols-[110px_1fr] gap-4 px-4 py-4">
-        {/* escalera de liquidez */}
-        <div className="relative">
-          <svg viewBox="0 0 90 210" className="h-full w-full" preserveAspectRatio="none">
-            <line x1="8" y1="105" x2="82" y2="105" stroke="#dbe6f7" strokeWidth="1.4" />
-            <text x="10" y="99" fill="#8fa3c4" fontSize="8" fontFamily="IBM Plex Mono, monospace">SPOT</text>
-            <text x="10" y="117" fill="#dbe6f7" fontSize="8.5" fontWeight="600" fontFamily="IBM Plex Mono, monospace">
-              {fmtPrice(cur, state.meta.decimals)}
-            </text>
-
-            <line x1="8" y1={up ? 22 : 188} x2="82" y2={up ? 22 : 188} stroke={col} strokeWidth="2" />
-            <text x="10" y={up ? 16 : 204} fill={col} fontSize="8" fontFamily="IBM Plex Mono, monospace">
-              {fmtUsd(target.sizeUsd)}
-            </text>
-
-            <line
-              x1="45" y1="105" x2="45" y2={up ? 26 : 184}
-              stroke={col} strokeWidth="1.6" strokeDasharray="5 7"
-              style={{ animation: "dashFlow 1.1s linear infinite" }}
-            />
-            <circle cx="45" cy={up ? 26 : 184} r="4" fill={col}>
-              <animate attributeName="r" values="3;5;3" dur="1.6s" repeatCount="indefinite" />
-            </circle>
-          </svg>
+      <div className="grid flex-1 grid-cols-[130px_1fr] gap-4 px-4 py-4">
+        {/* ---- escalera de liquidez (posición real por precio) ---- */}
+        <div className="relative min-h-[230px]">
+          {/* carril vertical */}
+          <div className="absolute left-[7px] top-0 h-full w-px bg-ink-700/70" />
+          {/* trayectoria spot → objetivo */}
+          <div
+            className="absolute left-[7px] w-px"
+            style={{
+              top: `${Math.min(spotTop, posOf(target.price))}%`,
+              height: `${Math.abs(posOf(target.price) - spotTop)}%`,
+              background: col,
+              opacity: 0.8,
+              backgroundImage: "repeating-linear-gradient(180deg, transparent, transparent 4px, rgba(7,12,22,0.9) 4px, rgba(7,12,22,0.9) 8px)",
+              animation: "dashFlow 1.4s linear infinite",
+            }}
+          />
+          {rungs.map((r) => {
+            const top = posOf(r.price);
+            if (r.isSpot) {
+              return (
+                <div key={r.id} className="absolute left-0 right-0 -translate-y-1/2" style={{ top: `${top}%` }}>
+                  <div className="flex items-center gap-2">
+                    <span className="relative z-10 h-[15px] w-[15px] shrink-0 rounded-full border-2 border-mist-100 bg-ink-900">
+                      <span className="absolute inset-[3px] animate-ping rounded-full bg-mist-100/60" />
+                    </span>
+                    <div className="flex min-w-0 items-baseline gap-1.5 border border-mist-200/40 bg-ink-800/90 px-1.5 py-0.5">
+                      <span className="font-mono text-[7.5px] font-bold uppercase tracking-wider text-mist-400">spot</span>
+                      <span className="tick-num truncate font-mono text-[10px] font-bold text-mist-100">
+                        {fmtPrice(cur, state.meta.decimals)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            const isL = r.side === "long";
+            const c = isL ? "#2de0c0" : "#ff5d7e";
+            return (
+              <div key={r.id} className="absolute left-0 right-0 -translate-y-1/2" style={{ top: `${top}%` }}>
+                <div className="group flex items-center gap-2">
+                  <span
+                    className="relative z-10 h-[9px] w-[9px] shrink-0 rounded-full transition-transform duration-200 group-hover:scale-125"
+                    style={{
+                      background: r.isTarget ? c : "rgba(37,54,80,0.9)",
+                      border: `1.5px solid ${c}`,
+                      boxShadow: r.isTarget ? `0 0 10px ${c}` : undefined,
+                    }}
+                  />
+                  <div
+                    className={`flex min-w-0 flex-1 items-baseline gap-1.5 border px-1.5 py-0.5 transition-all duration-200 group-hover:bg-ink-750/70 ${
+                      r.isTarget ? "border-current/40" : "border-ink-700/60"
+                    }`}
+                    style={r.isTarget ? { borderColor: `${c}55`, background: `${c}0f` } : undefined}
+                  >
+                    <span className={`font-mono text-[7.5px] font-bold uppercase tracking-wider ${isL ? "text-long-300" : "text-short-300"}`}>
+                      {r.leverage}
+                    </span>
+                    <span className={`tick-num truncate font-mono text-[9.5px] ${r.isTarget ? "font-bold text-mist-100" : "text-mist-300"}`}>
+                      {fmtPrice(r.price, state.meta.decimals)}
+                    </span>
+                    <span className="tick-num ml-auto shrink-0 font-mono text-[8px] text-mist-500">{fmtUsd(r.sizeUsd)}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
-        {/* fases */}
+        {/* ---- fases ---- */}
         <div className="flex flex-col justify-center gap-2.5">
           {PHASES.map((p, i) => {
             const active = i === phase;
@@ -70,7 +189,7 @@ export default function MarketMakerPanel({ state }: Props) {
               <div
                 key={p.n}
                 className={`border px-3 py-2 transition-all duration-500 ${
-                  active ? "border-ink-600 bg-ink-800/80" : "border-ink-700/40 opacity-55"
+                  active ? "border-ink-600 bg-ink-800/80" : "border-ink-700/40 opacity-50"
                 }`}
                 style={active ? { boxShadow: `inset 3px 0 0 ${col}` } : undefined}
               >
@@ -90,6 +209,36 @@ export default function MarketMakerPanel({ state }: Props) {
         </div>
       </div>
 
+      {/* ---- factores de probabilidad (transparentes) ---- */}
+      <div className="border-t border-ink-700/50 bg-ink-900/40 px-4 py-3">
+        <div className="mb-2 flex items-baseline justify-between">
+          <span className="font-mono text-[8.5px] font-bold uppercase tracking-[0.18em] text-mist-400">
+            Factores de probabilidad
+          </span>
+          <span className="font-mono text-[8px] uppercase tracking-wider text-mist-600" title="Media simple de los factores — orientación, no una certeza">
+            sesgo derivado <b className="tick-num text-[10px]" style={{ color: col }}>{Math.round(bias * 100)}%</b>
+          </span>
+        </div>
+        <div className="space-y-2">
+          {factors.map((f) => (
+            <div key={f.label} className="group" title={f.note}>
+              <div className="mb-0.5 flex items-baseline justify-between">
+                <span className="font-mono text-[8.5px] uppercase tracking-wider text-mist-500 transition-colors group-hover:text-mist-300">
+                  {f.label}
+                </span>
+                <span className="tick-num font-mono text-[9px] font-semibold text-mist-300">{Math.round(f.v * 100)}%</span>
+              </div>
+              <div className="h-1 overflow-hidden bg-ink-800">
+                <div
+                  className="h-full transition-all duration-700"
+                  style={{ width: `${Math.max(3, Math.round(f.v * 100))}%`, background: f.bar, opacity: 0.85 }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <footer className="grid grid-cols-3 divide-x divide-ink-700/50 border-t border-ink-700/50 bg-ink-900/50">
         <div className="px-3 py-2.5 text-center">
           <div className="font-mono text-[8.5px] uppercase tracking-widest text-mist-600">Objetivo</div>
@@ -97,11 +246,11 @@ export default function MarketMakerPanel({ state }: Props) {
         </div>
         <div className="px-3 py-2.5 text-center">
           <div className="font-mono text-[8.5px] uppercase tracking-widest text-mist-600">Distancia</div>
-          <div className={`tick-num mt-0.5 font-mono text-[11px] font-bold ${up ? "text-short-300" : "text-long-300"}`}>{fmtPct(dist)}</div>
+          <div className={`tick-num mt-0.5 font-mono text-[11px] font-bold ${up ? "text-short-300" : "text-long-300"}`}>{fmtPct(distPct)}</div>
         </div>
         <div className="px-3 py-2.5 text-center">
-          <div className="font-mono text-[8.5px] uppercase tracking-widest text-mist-600">Confianza</div>
-          <div className="tick-num mt-0.5 font-mono text-[11px] font-bold text-flare-300">{confidence}%</div>
+          <div className="font-mono text-[8.5px] uppercase tracking-widest text-mist-600">Apalancamiento</div>
+          <div className="tick-num mt-0.5 font-mono text-[11px] font-bold" style={{ color: col }}>{target.leverage}</div>
         </div>
       </footer>
     </section>
