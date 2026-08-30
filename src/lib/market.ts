@@ -475,10 +475,15 @@ export function applyLiveTick(s: MarketState, price: number, tfMinutes: number):
   }
   cvd[cvd.length - 1] = cvd[cvd.length - 2] + candles[candles.length - 1].delta;
 
+  // El rango anclado (pMin/pMax) SOLO se expande cuando la vela actual supera
+  // realmente los límites — nunca por "proximidad al borde". En timeframes bajos
+  // el span es diminuto y la expansión por proximidad se disparaba en casi cada
+  // tick, re-mapeando el calor constantemente hasta desvanecerlo.
   let pMin = s.pMin, pMax = s.pMax;
   const span = pMax - pMin || 1;
-  if (price < pMin + span * 0.05) pMin = price - span * 0.06;
-  if (price > pMax - span * 0.05) pMax = price + span * 0.06;
+  const lastK = candles[candles.length - 1];
+  if (lastK.l < pMin) pMin = lastK.l - span * 0.05;
+  if (lastK.h > pMax) pMax = lastK.h + span * 0.05;
   heat = rebinHeat(heat, s.pMin, s.pMax, pMin, pMax);
 
   return {

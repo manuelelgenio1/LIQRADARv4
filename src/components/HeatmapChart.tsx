@@ -309,16 +309,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
 
   // ---- mapeo precio↔píxel (lineal o logarítmico) compartido por canvas y tooltip ----
-  const view = useMemo(() => {
-    const start = CANDLE_COUNT - visibleCount;
-    let yMin = Infinity, yMax = -Infinity;
-    for (let i = start; i < CANDLE_COUNT; i++) {
-      yMin = Math.min(yMin, state.candles[i].l);
-      yMax = Math.max(yMax, state.candles[i].h);
-    }
-    const pad = (yMax - yMin) * 0.06 || 1;
-    return { start, yMin: yMin - pad, yMax: yMax + pad };
-  }, [state.candles, visibleCount]);
+  // El eje vertical usa state.pMin/pMax — la MISMA ancla contra la que se indexa
+  // el calor de liquidaciones. Usar una sola fuente de verdad evita que el eje y
+  // el calor diverjan (antes, en timeframes bajos, el calor se re-mapeaba contra
+  // un rango que derivaba del eje y desaparecía).
+  const view = useMemo(
+    () => ({ start: CANDLE_COUNT - visibleCount, yMin: state.pMin, yMax: state.pMax }),
+    [state.pMin, state.pMax, visibleCount]
+  );
 
   // memoizadas: son dependencias del efecto de dibujo y no deben recrearse en
   // cada render (evita redibujos innecesarios y referencias inestables)
