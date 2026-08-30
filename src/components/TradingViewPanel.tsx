@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 
 interface Props {
-  symbol: string; // BTCUSDT
-  base: string;   // BTC
-  tfKey: string;  // 5m
+  base: string;  // BTC
+  tfKey: string; // 5m
 }
 
-// estudios pre-cargados (los mismos indicadores del radar)
+// estudios pre-cargados (los mismos indicadores del radar) con su rol
 const STUDIES = [
-  { id: "EMA", tv: "STD;EMA" },
-  { id: "MACD", tv: "STD;MACD" },
-  { id: "RSI", tv: "STD;RSI" },
-  { id: "ADX", tv: "STD;ADX" },
-  { id: "ATR", tv: "STD;ATR" },
-  { id: "VWAP", tv: "STD;VWAP" },
-  { id: "ST", tv: "STD;Supertrend" },
-  { id: "VP", tv: "STD;Volume Profile" },
+  { id: "EMA", tv: "STD;EMA", role: "medias móviles · tendencia" },
+  { id: "MACD", tv: "STD;MACD", role: "momentum · cruces" },
+  { id: "RSI", tv: "STD;RSI", role: "sobrecompra / sobreventa" },
+  { id: "ADX", tv: "STD;ADX", role: "fuerza de tendencia" },
+  { id: "ATR", tv: "STD;ATR", role: "volatilidad" },
+  { id: "VWAP", tv: "STD;VWAP", role: "referencia institucional" },
+  { id: "ST", tv: "STD;Supertrend", role: "giros de tendencia" },
+  { id: "VP", tv: "STD;Volume Profile", role: "POC · área de valor" },
 ];
 
 const TV_TF: Record<string, string> = {
@@ -42,7 +41,9 @@ const HEIGHTS = [
   { id: "L", px: 1200, label: "Grande" },
 ] as const;
 
-type LoadMode = "widget" | "legacy" | "none";
+// "loading" = inyectando el script · "widget" = iframe oficial presente ·
+// "legacy" = embed alternativo (el script oficial no cargó)
+type LoadMode = "loading" | "widget" | "legacy";
 
 function loadOpen(): boolean {
   try {
@@ -80,31 +81,33 @@ function tvUrl(base: string, tfKey: string): string {
 
 function LoadingMark({ mode }: { mode: LoadMode }) {
   return (
-    <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-3 bg-ink-900/60">
-      <svg width="44" height="44" viewBox="0 0 44 44" fill="none" className="text-long-400">
-        <circle cx="22" cy="22" r="18" stroke="currentColor" strokeWidth="1.4" opacity="0.4" />
-        <g style={{ transformOrigin: "22px 22px", animation: "radarSweep 2.2s linear infinite" }}>
-          <path d="M22 22 L22 5 A17 17 0 0 1 37 13.5 Z" fill="currentColor" opacity="0.35" />
-        </g>
-        <circle cx="22" cy="22" r="2" fill="currentColor" />
-      </svg>
+    <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-4 bg-ink-900/70">
+      <div className="flex items-end gap-1.5">
+        {[18, 30, 22, 40, 26, 34].map((h, i) => (
+          <span
+            key={i}
+            className={`w-2.5 ${i % 2 ? "bg-short-400/70" : "bg-long-400/70"}`}
+            style={{ height: h, animation: `blipPulse 1.5s ease-in-out ${i * 0.13}s infinite` }}
+          />
+        ))}
+      </div>
       <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-mist-500">
-        {mode === "widget"
-          ? "cargando widget de TradingView…"
+        {mode === "loading"
+          ? "conectando con TradingView…"
           : mode === "legacy"
             ? "cargando modo compatible…"
-            : "gráfica no disponible aquí"}
+            : ""}
       </p>
     </div>
   );
 }
 
-export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
+export default function TradingViewPanel({ base, tfKey }: Props) {
   const [open, setOpen] = useState<boolean>(loadOpen);
   const [active, setActive] = useState<string[]>(loadStudies);
   const [heightId, setHeightId] = useState<(typeof HEIGHTS)[number]["id"]>(loadHeight);
   const [fullscreen, setFullscreen] = useState(false);
-  const [mode, setMode] = useState<LoadMode>("widget");
+  const [mode, setMode] = useState<LoadMode>("loading");
   const holderRef = useRef<HTMLDivElement>(null);
   const fsHolderRef = useRef<HTMLDivElement>(null);
 
@@ -135,15 +138,16 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
     };
   }, [fullscreen]);
 
-  // inyección del widget oficial con ALTURA EXPLÍCITA medida del contenedor.
-  // Si el script no carga (bloqueador de anuncios, red…), el watchdog de 7 s
-  // cae al modo compatible (iframe de otro dominio).
+  // Inyección del widget oficial con altura EXPLÍCITA medida del contenedor.
+  // El holder SIEMPRE está montado (aunque se muestre el modo compatible),
+  // así el efecto nunca encuentra una ref nula y puede reintentar el widget
+  // oficial al cambiar estudios/altura/temporalidad — sin deadlocks.
   useEffect(() => {
     if (!open && !fullscreen) return;
     const holder = fullscreen ? fsHolderRef.current : holderRef.current;
     if (!holder) return;
 
-    setMode("widget");
+    setMode("loading");
     holder.innerHTML = "";
 
     const inject = () => {
@@ -182,19 +186,27 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
       holder.appendChild(s);
     };
 
+    // cuando el widget crea su iframe → confirmado como "widget oficial"
+    const obs = new MutationObserver(() => {
+      if (holder.querySelector("iframe")) setMode("widget");
+    });
+    obs.observe(holder, { childList: true, subtree: true });
+
     // medir tras un frame, cuando el contenedor ya tiene su tamaño definitivo
     const raf = requestAnimationFrame(inject);
 
-    // watchdog: si en 7 s no apareció el iframe del widget → modo compatible
+    // watchdog: si en 8 s no apareció el iframe → modo compatible
     const dog = window.setTimeout(() => {
       if (!holder.querySelector("iframe")) setMode("legacy");
-    }, 7000);
+    }, 8000);
 
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(dog);
+      obs.disconnect();
     };
-  }, [open, fullscreen, base, tfKey, active]);
+    // heightPx en las deps: cambiar S/M/L re-inyecta el widget a la nueva altura
+  }, [open, fullscreen, base, tfKey, active, heightPx]);
 
   // iframe del modo compatible
   const legacySrc = `https://s.tradingview.com/widgetembed/?frameElementId=tv-liqradar&symbol=BINANCE%3A${base}USDT&interval=${
@@ -205,70 +217,98 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
       .join(",")
   )}`;
 
-  const body = (isFs: boolean) =>
-    mode === "legacy" ? (
-      <iframe
-        title="TradingView (modo compatible)"
-        src={legacySrc}
-        className="relative z-10 h-full w-full border-0"
-        allow="fullscreen"
+  // El área de gráfico SIEMPRE mantiene montado el holder (ref estable);
+  // el modo compatible se superpone como iframe sin desmontar nada.
+  const chartArea = (isFs: boolean) => (
+    <>
+      {mode !== "widget" && <LoadingMark mode={mode} />}
+      <div
+        ref={isFs ? fsHolderRef : holderRef}
+        className="tradingview-widget-container relative z-10 h-full w-full"
       />
-    ) : (
-      <>
-        <LoadingMark mode={mode} />
-        <div
-          ref={isFs ? fsHolderRef : holderRef}
-          className="tradingview-widget-container relative z-10 h-full w-full"
+      {mode === "legacy" && (
+        <iframe
+          title="TradingView (modo compatible)"
+          src={legacySrc}
+          className="absolute inset-0 z-20 h-full w-full border-0"
+          allow="fullscreen"
         />
-      </>
-    );
+      )}
+    </>
+  );
+
+  const studyChips = (compact: boolean) =>
+    STUDIES.map((st) => {
+      const on = active.includes(st.id);
+      return (
+        <button
+          key={st.id}
+          onClick={() => setActive((p) => (on ? p.filter((x) => x !== st.id) : [...p, st.id]))}
+          className={`shrink-0 font-mono text-[9px] font-semibold uppercase tracking-wider transition-all duration-150 ${
+            compact ? "border px-2 py-1" : "px-2 py-1.5"
+          } ${
+            on
+              ? compact
+                ? "border-long-500/50 bg-long-900/40 text-long-300"
+                : "bg-long-500/15 text-long-300 shadow-[inset_0_-2px_0_rgba(45,224,192,0.55)]"
+              : compact
+                ? "border-ink-700 bg-ink-850 text-mist-600 hover:text-mist-400"
+                : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+          }`}
+          title={`${st.role}${on ? " · activo" : " · desactivado"}`}
+        >
+          {st.id}
+        </button>
+      );
+    });
+
+  const modeBadge =
+    mode === "widget"
+      ? { t: "widget oficial", c: "border-long-500/50 bg-long-900/40 text-long-300" }
+      : mode === "legacy"
+        ? { t: "modo compatible", c: "border-flare-400/50 bg-flare-400/10 text-flare-300" }
+        : { t: "conectando…", c: "border-ink-600 bg-ink-800 text-mist-400" };
 
   return (
     <>
       <section className="panel anim-reveal" style={{ animationDelay: "0.66s" }}>
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/50 px-4 py-3">
-          <div className="leading-none">
-            <h2 className="flex items-center gap-2 font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
-              Análisis clásico · TradingView
-              <span
-                className={`border px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-widest ${
-                  mode === "widget"
-                    ? "border-long-500/50 bg-long-900/40 text-long-300"
-                    : mode === "legacy"
-                      ? "border-flare-400/50 bg-flare-400/10 text-flare-300"
-                      : "border-ink-600 bg-ink-800 text-mist-500"
-                }`}
-              >
-                {mode === "widget" ? "widget oficial" : mode === "legacy" ? "modo compatible" : "—"}
-              </span>
-            </h2>
-            <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-              {base}USDT · {tfKey} · sincronizado con el radar
-            </p>
+          <div className="flex items-center gap-2.5 leading-none">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <line x1="4" y1="3" x2="4" y2="21" stroke="#2de0c0" strokeWidth="1.2" opacity="0.5" />
+              <rect x="2.5" y="9" width="3" height="8" fill="#2de0c0" />
+              <line x1="10" y1="2" x2="10" y2="22" stroke="#ff5d7e" strokeWidth="1.2" opacity="0.5" />
+              <rect x="8.5" y="6" width="3" height="9" fill="#ff5d7e" />
+              <line x1="16" y1="4" x2="16" y2="20" stroke="#2de0c0" strokeWidth="1.2" opacity="0.5" />
+              <rect x="14.5" y="8" width="3" height="7" fill="#2de0c0" />
+              <line x1="22" y1="2" x2="22" y2="18" stroke="#ff5d7e" strokeWidth="1.2" opacity="0.5" />
+              <rect x="20.5" y="5" width="3" height="8" fill="#ff5d7e" />
+            </svg>
+            <div>
+              <h2 className="flex items-center gap-2 font-display text-[15px] font-bold uppercase tracking-[0.14em] text-mist-100">
+                Análisis clásico
+                <span className={`border px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-widest ${modeBadge.c}`}>
+                  {mode === "widget" && (
+                    <span className="mr-1 inline-block h-1 w-1 rounded-full bg-long-400" style={{ animation: "liveBlink 1.6s ease-out infinite" }} />
+                  )}
+                  {modeBadge.t}
+                </span>
+              </h2>
+              <p className="mt-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
+                <span className="h-1 w-1 rounded-full bg-long-400" style={{ animation: "liveBlink 2s ease-out infinite" }} />
+                <b className="text-mist-300">{base}USDT</b> · {tfKey} · sincronizado con el radar
+              </p>
+            </div>
           </div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {/* selector de indicadores */}
             <div className="flex flex-wrap items-center border border-ink-700 bg-ink-850/80">
-              {STUDIES.map((st) => {
-                const on = active.includes(st.id);
-                return (
-                  <button
-                    key={st.id}
-                    onClick={() =>
-                      setActive((p) => (on ? p.filter((x) => x !== st.id) : [...p, st.id]))
-                    }
-                    className={`px-2 py-1.5 font-mono text-[9px] font-semibold uppercase tracking-wider transition-all duration-150 ${
-                      on
-                        ? "bg-long-500/15 text-long-300 shadow-[inset_0_-2px_0_rgba(45,224,192,0.55)]"
-                        : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
-                    }`}
-                    title={st.tv}
-                  >
-                    {st.id}
-                  </button>
-                );
-              })}
+              <span className="border-r border-ink-700 px-2 py-1.5 font-mono text-[8px] font-bold uppercase tracking-widest text-mist-600">
+                ind
+                <b className="tick-num ml-1 text-long-300">{active.length}/{STUDIES.length}</b>
+              </span>
+              {studyChips(false)}
             </div>
 
             {/* selector de altura */}
@@ -282,6 +322,7 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
                       ? "bg-mist-200/15 text-mist-100"
                       : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
                   }`}
+                  title={h.label}
                 >
                   {h.id}
                 </button>
@@ -296,7 +337,7 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
                 <path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Pantalla completa
+              Ampliar
             </button>
 
             <button
@@ -315,17 +356,19 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
           </div>
         </header>
 
-        {open && (
+        {/* solo se monta el gráfico inline cuando NO hay pantalla completa,
+            para no tener dos widgets corriendo a la vez */}
+        {open && !fullscreen && (
           <div className="relative bg-ink-900/40">
             <div className="relative w-full" style={{ height: heightPx }}>
-              {body(false)}
+              {chartArea(false)}
             </div>
           </div>
         )}
 
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-700/50 bg-ink-900/50 px-4 py-2 font-mono text-[8.5px] uppercase tracking-widest text-mist-600">
           <span>
-            widget oficial de TradingView · mismo símbolo y temporalidad del radar
+            velas japonesas · mismo símbolo y temporalidad del radar
             {mode === "legacy" && " · (embed alternativo porque el widget oficial no cargó)"}
           </span>
           <a
@@ -343,28 +386,12 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
       {fullscreen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
           <div className="flex h-12 shrink-0 items-center gap-3 border-b border-ink-700/60 bg-ink-900/90 px-4">
-            <span className="font-display text-xs font-bold uppercase tracking-[0.18em] text-mist-100">
+            <span className="flex items-center gap-2 font-display text-xs font-bold uppercase tracking-[0.18em] text-mist-100">
+              <span className="h-1.5 w-1.5 rounded-full bg-long-400" style={{ animation: "liveBlink 1.6s ease-out infinite" }} />
               Análisis clásico · <span className="text-long-400">{base}USDT</span> · {tfKey}
             </span>
             <div className="scroll-slim ml-auto flex items-center gap-1 overflow-x-auto">
-              {STUDIES.map((st) => {
-                const on = active.includes(st.id);
-                return (
-                  <button
-                    key={st.id}
-                    onClick={() =>
-                      setActive((p) => (on ? p.filter((x) => x !== st.id) : [...p, st.id]))
-                    }
-                    className={`shrink-0 border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-                      on
-                        ? "border-long-500/50 bg-long-900/40 text-long-300"
-                        : "border-ink-700 bg-ink-850 text-mist-600 hover:text-mist-400"
-                    }`}
-                  >
-                    {st.id}
-                  </button>
-                );
-              })}
+              {studyChips(true)}
             </div>
             <button
               onClick={() => setFullscreen(false)}
@@ -377,7 +404,7 @@ export default function TradingViewPanel({ symbol, base, tfKey }: Props) {
             </button>
           </div>
           <div className="relative min-h-0 flex-1">
-            {body(true)}
+            {chartArea(true)}
           </div>
         </div>
       )}

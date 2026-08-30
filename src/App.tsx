@@ -175,7 +175,7 @@ function Dashboard() {
         />
 
         {/* gráfica interactiva de TradingView con los indicadores del radar (al final, con su propio espacio) */}
-        <TradingViewPanel symbol={engine.symbol} base={engine.meta.base} tfKey={engine.tfKey} />
+        <TradingViewPanel base={engine.meta.base} tfKey={engine.tfKey} />
 
         <footer className="flex flex-col items-center justify-between gap-2 border-t border-ink-700/50 pb-4 pt-5 font-mono text-[9.5px] uppercase tracking-[0.18em] text-mist-600 sm:flex-row">
           <span>
