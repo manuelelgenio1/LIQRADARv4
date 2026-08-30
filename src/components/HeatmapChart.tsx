@@ -68,13 +68,15 @@ function sampleRamp(t: number, stops: [number, number, number, number][]): [numb
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f];
 }
 
+// zoom por defecto: 88 de 128 velas → deja 40 velas de historia para desplazarse
+const DEFAULT_VIS = 88;
 function loadZoom(tf: string): number {
   try {
     const m = JSON.parse(localStorage.getItem(ZOOM_KEY) ?? "{}") as Record<string, number>;
     const v = m[tf];
     if (Number.isFinite(v)) return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, Math.round(v)));
   } catch { /* sin almacenamiento */ }
-  return CANDLE_COUNT;
+  return DEFAULT_VIS;
 }
 function loadLayers(): Layers {
   const out = { ...DEFAULT_LAYERS };
@@ -213,7 +215,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const meta = state.meta;
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
   const dragging = useRef<{ startX: number; startOff: number } | null>(null);
-  const [, forceRerender] = useState(0);
+  const [grabbing, setGrabbing] = useState(false);
 
   // ventana visible: [start, end) con offset desde la derecha
   const view = useMemo(() => {
@@ -864,7 +866,6 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       }
     }
 
-    forceRerender((n) => n + 1);
   }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, offset, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, heatInt, oscOpen, remainStr]);
 
   // ================= MINIMAPA =================
@@ -932,19 +933,25 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       const newOff = Math.max(0, Math.min(CANDLE_COUNT - visibleCount, dragging.current.startOff + dIdx));
       setOffset(newOff);
     };
-    const onUp = () => { dragging.current = null; document.body.style.cursor = ""; };
+    const onUp = () => { dragging.current = null; miniDrag.current = false; document.body.style.cursor = ""; setGrabbing(false); };
     window.addEventListener("mousemove", onMoveDrag);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMoveDrag); window.removeEventListener("mouseup", onUp); };
   }, [width, visibleCount]);
 
-  const onMinimapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+  // centra la ventana visible en el índice del minimapa correspondiente a x
+  const jumpMinimap = (clientX: number, el: HTMLCanvasElement) => {
+    const rect = el.getBoundingClientRect();
+    const x = clientX - rect.left;
     const plotW = width - SCALE_W;
     const centerIdx = Math.round((x / plotW) * CANDLE_COUNT);
     const newEnd = Math.max(visibleCount, Math.min(CANDLE_COUNT, centerIdx + Math.floor(visibleCount / 2)));
     setOffset(Math.max(0, CANDLE_COUNT - newEnd));
+  };
+  const miniDrag = useRef(false);
+  const onMinimapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    miniDrag.current = true;
+    jumpMinimap(e.clientX, e.currentTarget);
   };
 
   const k = hover ? state.candles[hover.idx] : null;
@@ -957,8 +964,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
   return (
     <section
-      className={`panel panel-corner anim-reveal ${fullscreen ? "fixed inset-0 z-50 flex flex-col overflow-hidden rounded-none border-0" : ""}`}
-      style={{ animationDelay: "0.05s" }}
+      className={`panel panel-corner ${fullscreen ? "flex flex-col overflow-hidden rounded-none border-0" : "anim-reveal"}`}
+      style={
+        fullscreen
+          // inline vence a `.panel { position: relative }` y `transform: none`
+          // anula el residuo de la animación que rompía `position: fixed`
+          ? { position: "fixed", inset: 0, zIndex: 60, width: "100vw", height: "100vh", transform: "none" }
+          : { animationDelay: "0.05s" }
+      }
     >
       {/* cabecera */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/50 px-4 py-2.5">
@@ -1025,9 +1038,9 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         <ToolDivider />
         <ToolGroup label="Zoom" title="Rueda = zoom al cursor · arrastrar = desplazarse">
           <button onClick={() => zoomAt(1)} className="px-2 font-mono text-[12px] font-bold text-mist-400 hover:bg-ink-750 hover:text-mist-100" title="Alejar">−</button>
-          <button onClick={() => { setVisibleCount(CANDLE_COUNT); setOffset(0); }}
+          <button onClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); }}
             className={`tick-num border-x border-ink-700 px-2 py-1 font-mono text-[10px] font-semibold hover:bg-ink-750 ${zoomed ? "text-flare-300" : "text-mist-400"}`}
-            title="Restablecer">×{(CANDLE_COUNT / visibleCount).toFixed(1)}</button>
+            title={`Restablecer (${DEFAULT_VIS} velas)`}>×{(CANDLE_COUNT / visibleCount).toFixed(1)}</button>
           <button onClick={() => zoomAt(-1)} className="px-2 font-mono text-[12px] font-bold text-mist-400 hover:bg-ink-750 hover:text-mist-100" title="Acercar">+</button>
         </ToolGroup>
         <ToolGroup label="Escala">
@@ -1097,11 +1110,22 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: fullscreen ? "100%" : chartH, display: "block", cursor: dragging.current ? "grabbing" : "crosshair" }}
+          style={{
+            width: "100%",
+            height: fullscreen ? "100%" : chartH,
+            display: "block",
+            // arrastrar siempre es posible (paneo); se muestra "grab" cuando hay historia que recorrer
+            cursor: grabbing ? "grabbing" : offset > 0 || visibleCount < CANDLE_COUNT ? "grab" : "crosshair",
+            touchAction: "none",
+          }}
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
-          onMouseDown={(e) => { dragging.current = { startX: e.clientX, startOff: offset }; document.body.style.cursor = "grabbing"; }}
-          onDoubleClick={() => { setVisibleCount(CANDLE_COUNT); setOffset(0); }}
+          onMouseDown={(e) => {
+            dragging.current = { startX: e.clientX, startOff: offset };
+            document.body.style.cursor = "grabbing";
+            setGrabbing(true);
+          }}
+          onDoubleClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); }}
         />
 
         {/* botón volver al presente */}
@@ -1134,9 +1158,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         )}
       </div>
 
-      {/* minimapa de navegación */}
-      <div className="border-t border-ink-700/50 bg-ink-900/70">
-        <canvas ref={miniRef} style={{ width: "100%", height: MINIMAP_H, display: "block", cursor: "pointer" }} onClick={onMinimapClick} />
+      {/* minimapa de navegación: clic o arrastre para recorrer toda la historia */}
+      <div className="border-t border-ink-700/50 bg-ink-900/70" title="Minimapa: haz clic o arrastra para desplazarte por el historial">
+        <canvas
+          ref={miniRef}
+          style={{ width: "100%", height: MINIMAP_H, display: "block", cursor: "ew-resize", touchAction: "none" }}
+          onMouseDown={onMinimapClick}
+          onMouseMove={(e) => { if (miniDrag.current) jumpMinimap(e.clientX, e.currentTarget); }}
+        />
       </div>
 
       {/* barra de estado */}
