@@ -81,19 +81,19 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
               return (
                 <div
                   key={c.tf}
-                  className={`flex items-center gap-2 border px-2.5 py-1.5 transition-all ${
+                  className={`flex items-center gap-2 border px-2.5 py-1.5 transition-colors duration-500 ${
                     isActive
                       ? "border-flare-400/50 bg-flare-400/10 shadow-[0_0_12px_rgba(255,178,36,0.15)]"
                       : "border-ink-700 bg-ink-850/80"
                   }`}
                   title={`${c.tf}${isActive ? " (temporalidad activa del gráfico)" : ""}: ${m.label} · convicción ${pctOf(c.strength)}`}
                 >
-                  <span className={`font-mono text-[10px] font-bold ${isActive ? "text-flare-300" : "text-mist-300"}`}>
+                  <span className={`font-mono text-[10px] font-bold transition-colors duration-500 ${isActive ? "text-flare-300" : "text-mist-300"}`}>
                     {c.tf}
                     {isActive && <span className="ml-1 text-[7px]">●</span>}
                   </span>
-                  <span className={`h-2 w-2 rounded-full ${m.dot}`} />
-                  <span className={`font-mono text-[8.5px] font-bold uppercase tracking-wider ${m.text}`}>{m.label}</span>
+                  <span className={`h-2 w-2 rounded-full transition-colors duration-500 ${m.dot}`} />
+                  <span className={`font-mono text-[8.5px] font-bold uppercase tracking-wider transition-colors duration-500 ${m.text}`}>{m.label}</span>
                   <span className="h-1 w-8 overflow-hidden bg-ink-700">
                     <span
                       className="block h-full transition-all duration-700"

@@ -402,7 +402,9 @@ export function useMarketEngine() {
     };
     reloadConfluenceRef.current = () => void load();
     load();
-    const id = window.setInterval(load, 60_000);
+    // 30 s en live (los chips se notan frescos); en simulado no cambia nada
+    // entre recargas, así que no vale la pena recalcular tan a menudo.
+    const id = window.setInterval(load, source === "live" ? 30_000 : 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);

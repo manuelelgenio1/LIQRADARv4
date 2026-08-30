@@ -497,6 +497,25 @@ export function applyLiveTick(s: MarketState, price: number, tfMinutes: number):
   }
   cvd[cvd.length - 1] = cvd[cvd.length - 2] + candles[candles.length - 1].delta;
 
+  // Mantener viva la semilla extendida (warm) con cada tick del websocket:
+  // los indicadores (y por tanto la insignia de tendencia y la confluencia)
+  // se recalculan sobre warm, así que si no se actualiza aquí solo cambiarían
+  // cada 20 s (cuando corre mergeLiveKlines). Parcheamos la última vela de
+  // warm con el precio vivo; en rollover añadimos la vela nueva (acotada a 700).
+  let warm = s.warm;
+  if (warm && warm.length) {
+    const wl = { ...warm[warm.length - 1] };
+    if (rolled) {
+      const nc: Candle = { t: Math.floor(now / stepMs) * stepMs, o: price, h: price, l: price, c: price, v: 0, delta: 0 };
+      warm = warm.length >= 700 ? [...warm.slice(warm.length - 699), nc] : [...warm, nc];
+    } else if (now - wl.t < stepMs * 1.5) {
+      wl.c = price;
+      wl.h = Math.max(wl.h, price);
+      wl.l = Math.min(wl.l, price);
+      warm = [...warm.slice(0, warm.length - 1), wl];
+    }
+  }
+
   // El rango anclado (pMin/pMax) SOLO se expande cuando la vela actual supera
   // realmente los límites — nunca por "proximidad al borde". En timeframes bajos
   // el span es diminuto y la expansión por proximidad se disparaba en casi cada
@@ -511,6 +530,7 @@ export function applyLiveTick(s: MarketState, price: number, tfMinutes: number):
   return {
     ...s,
     candles,
+    warm,
     heat,
     cvd,
     pMin,
