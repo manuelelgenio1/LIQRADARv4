@@ -8,44 +8,111 @@ export function FundingOIPanel({ state, sentiment }: { state: MarketState; senti
   const ls = real ? sentiment.ratio : state.longShortRatio;
   const longPct = real ? sentiment.longPct : (ls / (1 + ls)) * 100;
 
+  // coste real del funding: cuánto pagas/recibes por $10K de nocional
+  const costPer10k = (state.funding / 100) * 10_000;
+  // posición del funding en el rango típico (±0.1%) para el gauge
+  const fundingPos = Math.max(0, Math.min(100, ((state.funding + 0.1) / 0.2) * 100));
+
+  const realBadge = (
+    <span
+      className={`border px-1 py-px font-mono text-[7.5px] font-bold tracking-widest ${
+        real ? "border-long-500/50 bg-long-900/50 text-long-300" : "border-ink-600 bg-ink-800 text-mist-500"
+      }`}
+    >
+      {real ? "REAL" : "MODELO"}
+    </span>
+  );
+
   return (
     <section className="panel anim-reveal" style={{ animationDelay: "0.3s" }}>
       <header className="flex items-center justify-between border-b border-ink-700/50 px-4 py-3">
-        <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Funding & OI</h2>
-        <span className="font-mono text-[9px] uppercase tracking-widest text-mist-600">perpetuo</span>
+        <h2 className="flex items-center gap-2 font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">
+          Funding & OI
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{
+              background: real ? "#2de0c0" : "#5f7396",
+              animation: real ? "liveBlink 1.6s ease-out infinite" : "none",
+            }}
+            title={real ? "Datos reales de Binance Futures" : "Datos del modelo (sin conexión)"}
+          />
+        </h2>
+        <span className="font-mono text-[9px] uppercase tracking-widest text-mist-600">perpetuo · usdt</span>
       </header>
 
       <div className="grid grid-cols-2 divide-x divide-ink-700/50">
+        {/* funding rate + gauge */}
         <div className="px-4 py-3">
-          <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">Funding rate</div>
-          <div className={`tick-num mt-1 font-display text-2xl font-bold ${state.funding >= 0 ? "text-long-300" : "text-short-300"}`}>
+          <div className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">
+            Funding rate {realBadge}
+          </div>
+          <div className={`tick-num mt-1 font-display text-2xl font-bold leading-none ${state.funding >= 0 ? "text-long-300" : "text-short-300"}`}>
             {fmtPct(state.funding, 4)}
           </div>
-          <div className="mt-1 font-mono text-[9px] text-mist-600">
+          <div className="mt-1.5 font-mono text-[9px] text-mist-600">
             {state.funding >= 0 ? "longs pagan a shorts" : "shorts pagan a longs"}
           </div>
+          {/* gauge: posición del funding en el rango típico ±0.1% */}
+          <div className="relative mt-2 h-1.5 overflow-hidden bg-ink-800">
+            <div className="absolute inset-y-0 left-1/2 w-px bg-mist-200/40" />
+            <div
+              className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-ink-950 transition-all duration-700"
+              style={{
+                left: `${fundingPos}%`,
+                background: state.funding >= 0 ? "#2de0c0" : "#ff5d7e",
+                boxShadow: `0 0 8px ${state.funding >= 0 ? "rgba(45,224,192,0.7)" : "rgba(255,93,126,0.7)"}`,
+              }}
+            />
+          </div>
+          <div className="mt-1 flex justify-between font-mono text-[7.5px] uppercase tracking-widest text-mist-600">
+            <span>−0.1%</span>
+            <span>0</span>
+            <span>+0.1%</span>
+          </div>
+          <div className="mt-1.5 border-t border-ink-700/40 pt-1.5 font-mono text-[8.5px] uppercase tracking-widest text-mist-600">
+            por $10K:{" "}
+            <b className={`tick-num ${costPer10k >= 0 ? "text-short-300" : "text-long-300"}`}>
+              {costPer10k >= 0 ? "pagas " : "recibes "}
+              {fmtUsd(Math.abs(costPer10k), 2)}
+            </b>
+          </div>
         </div>
+
+        {/* countdown */}
         <div className="px-4 py-3">
           <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">Próximo funding</div>
-          <div className="tick-num mt-1 font-display text-2xl font-bold text-mist-200">{fmtCountdown(state.fundingNextMs)}</div>
-          <div className="mt-1 flex items-center gap-1 font-mono text-[9px] text-mist-600">
-            <svg width="9" height="9" viewBox="0 0 12 12" className="text-flare-400">
+          <div className="tick-num mt-1 font-display text-2xl font-bold leading-none text-mist-200">
+            {fmtCountdown(state.fundingNextMs)}
+          </div>
+          <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[9px] text-mist-600">
+            <svg width="10" height="10" viewBox="0 0 12 12" className="text-flare-400" style={{ animation: "liveBlink 2s ease-out infinite" }}>
               <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
               <path d="M6 3v3l2 1.5" stroke="currentColor" strokeWidth="1.2" fill="none" />
             </svg>
             intervalo 8h
           </div>
+          <div className="mt-2.5 font-mono text-[8.5px] leading-relaxed text-mist-600">
+            El pago se liquida automáticamente al llegar a cero.
+          </div>
         </div>
       </div>
 
       <div className="border-t border-ink-700/50 px-4 py-3">
+        {/* Open interest (USD real × markPrice) */}
         <div className="flex items-baseline justify-between">
-          <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">Open interest</span>
-          <span className={`tick-num font-mono text-[10px] font-semibold ${state.oiDelta1h >= 0 ? "text-long-300" : "text-short-300"}`}>
-            {fmtPct(state.oiDelta1h)} 1h
+          <span className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">
+            Open interest {realBadge}
+          </span>
+          <span
+            className={`tick-num font-mono text-[10px] font-semibold ${state.oiDelta1h >= 0 ? "text-long-300" : "text-short-300"}`}
+            title="Variación estimada por el modelo (Binance no expone histórico de OI gratis)"
+          >
+            {fmtPct(state.oiDelta1h)} 1h <span className="text-mist-600">· modelo</span>
           </span>
         </div>
-        <div className="tick-num mt-1 font-display text-xl font-bold text-mist-100">{fmtUsd(state.oi, 2)}</div>
+        <div className="tick-num mt-1 font-display text-xl font-bold text-mist-100" title="Nocional real: contratos × markPrice">
+          {fmtUsd(state.oi, 2)}
+        </div>
         <div className="mt-2 h-1.5 overflow-hidden bg-ink-800">
           <div
             className={`h-full transition-all duration-700 ${state.oiDelta1h >= 0 ? "bg-long-400" : "bg-short-400"}`}
@@ -53,16 +120,10 @@ export function FundingOIPanel({ state, sentiment }: { state: MarketState; senti
           />
         </div>
 
+        {/* ratio long/short */}
         <div className="mt-3 flex items-baseline justify-between">
           <span className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">
-            Ratio long/short
-            <span
-              className={`border px-1 py-px font-mono text-[7.5px] font-bold tracking-widest ${
-                real ? "border-long-500/50 bg-long-900/50 text-long-300" : "border-ink-600 bg-ink-800 text-mist-500"
-              }`}
-            >
-              {real ? "REAL" : "MODELO"}
-            </span>
+            Ratio long/short {realBadge}
           </span>
           <span className="tick-num font-mono text-[10px] font-semibold text-mist-300">{ls.toFixed(2)}</span>
         </div>

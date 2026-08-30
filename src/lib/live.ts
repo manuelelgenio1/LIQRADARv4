@@ -144,15 +144,27 @@ export async function fetchFundingOi(symbol: string): Promise<FundingOi | null> 
 
   let funding = NaN;
   let nextMs = NaN;
+  let markPrice = NaN;
   if (pf.status === "fulfilled" && pf.value.ok) {
-    const j = (await pf.value.json()) as { lastFundingRate?: string; nextFundingTime?: number };
+    const j = (await pf.value.json()) as {
+      lastFundingRate?: string;
+      nextFundingTime?: number;
+      markPrice?: string;
+    };
     funding = Number(j.lastFundingRate) * 100;
     nextMs = Number(j.nextFundingTime) - Date.now();
+    markPrice = Number(j.markPrice);
   }
+  // Binance devuelve el OI en ACTIVO BASE (nº de BTC/ETH…), no en USD. Para el
+  // nocional real hay que multiplicar por el markPrice. Sin markPrice no se
+  // puede convertir, así que se descarta (mejor NaN que un número engañoso).
   let oi = NaN;
   if (po.status === "fulfilled" && po.value.ok) {
     const j = (await po.value.json()) as { openInterest?: string };
-    oi = Number(j.openInterest);
+    const base = Number(j.openInterest);
+    if (Number.isFinite(base) && Number.isFinite(markPrice) && markPrice > 0) {
+      oi = base * markPrice; // nocional USD real
+    }
   }
   if (!Number.isFinite(funding) && !Number.isFinite(oi)) return null;
   return {
