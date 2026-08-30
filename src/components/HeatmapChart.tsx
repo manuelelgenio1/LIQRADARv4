@@ -1382,6 +1382,27 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             </button>
           ))}
         </ToolGroup>
+
+        <ToolDivider />
+
+        <ToolGroup
+          label="Apalancamiento"
+          title="Líneas de liquidación por apalancamiento: distancia ≈ 1/apalancamiento desde el precio actual (margen aislado)"
+        >
+          {LEVS.map((lv) => (
+            <button
+              key={lv}
+              onClick={() => setLevOn((p) => ({ ...p, [lv]: !p[lv] }))}
+              className={`px-2 py-1 font-mono text-[10px] font-semibold transition-all duration-150 ${
+                levOn[lv]
+                  ? "bg-flare-400/15 text-flare-300 shadow-[inset_0_-2px_0_rgba(255,178,36,0.55)]"
+                  : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+              }`}
+            >
+              {lv}×
+            </button>
+          ))}
+        </ToolGroup>
       </div>
 
       <div ref={wrapRef} className={fullscreen ? "relative min-h-0 flex-1" : "relative"}>

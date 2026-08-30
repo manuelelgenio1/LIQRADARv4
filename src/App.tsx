@@ -64,6 +64,20 @@ function Dashboard() {
   // panel de Consenso (antes cada uno los recalculaba por su cuenta).
   const { ind, cfg } = useIndicators(state, engine.tfKey, engine.calibration);
 
+  // Confluencia con la temporalidad ACTIVA forzada a coincidir con el heatmap:
+  // la entrada de tfKey se toma del mismo consenso (ind) que alimenta la
+  // insignia del gráfico, así el chip activo y la insignia nunca difieren.
+  const mergedConfluence = engine.confluence
+    ? [
+        ...engine.confluence.filter((c) => c.tf !== engine.tfKey),
+        { tf: engine.tfKey, dir: ind.consensus.dir, strength: ind.consensus.strength },
+      ].sort(
+        (a, b) =>
+          engine.timeframes.findIndex((t) => t.key === a.tf) -
+          engine.timeframes.findIndex((t) => t.key === b.tf)
+      )
+    : null;
+
   return (
     <div className="min-h-screen font-body">
       <div className="ambient" aria-hidden />
@@ -85,7 +99,7 @@ function Dashboard() {
 
       <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 lg:px-6 lg:py-5">
         {/* franja de confluencia multi-timeframe */}
-        <ConfluenceStrip confluence={engine.confluence} symbol={engine.symbol} />
+        <ConfluenceStrip confluence={mergedConfluence} symbol={engine.symbol} activeTf={engine.tfKey} />
 
         {/* fila 1: heatmap (8/12) + radar (4/12) — alturas igualadas */}
         <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
@@ -98,7 +112,7 @@ function Dashboard() {
               realCvd={engine.realCvd}
               ind={ind}
               cfg={cfg}
-              confluence={engine.confluence}
+              confluence={mergedConfluence}
             />
           </div>
           <div className="xl:col-span-4">

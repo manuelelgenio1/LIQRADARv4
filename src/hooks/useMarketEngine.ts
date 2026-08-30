@@ -350,7 +350,8 @@ export function useMarketEngine() {
   useEffect(() => {
     if (source === "connecting") return;
     let cancelled = false;
-    const tfs = ["5m", "15m", "1H", "4H", "1D"];
+    // Las 7 temporalidades, para que la activa (tfKey) siempre esté presente
+    const tfs = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
     const m = SYMBOLS.find((x) => x.symbol === symbol) ?? SYMBOLS[0];
     const cfgFor = (tf: string) => {
       const base = getIndicatorCfg(tf);
