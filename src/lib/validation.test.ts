@@ -14,7 +14,7 @@ const cluster = (price: number, side: "long" | "short", sizeUsd = 1e6): LiqClust
 
 describe("syncPools", () => {
   it("registra los pools detectados dentro de la ventana de distancia", () => {
-    const log = syncPools([], "BTCUSDT", [cluster(99_000, "long"), cluster(101_000, "short")], 100_000, 1000);
+    const log = syncPools([], "BTCUSDT", "perp", [cluster(99_000, "long"), cluster(101_000, "short")], 100_000, 1000);
     expect(log.length).toBeGreaterThanOrEqual(2);
     expect(log.every((r) => r.status === "pendiente")).toBe(true);
   });
@@ -28,7 +28,7 @@ describe("syncPools", () => {
       },
     ];
     // precio toca el nivel
-    log = syncPools(log, "BTCUSDT", [], 99_520, 2000);
+    log = syncPools(log, "BTCUSDT", "perp", [], 99_520, 2000);
     expect(log[0].status).toBe("barrido");
     expect(log[0].sweptAt).toBe(2000);
   });
@@ -43,7 +43,7 @@ describe("syncPools", () => {
       },
     ];
     // 15 min después el precio rebotó +0,5% (reversión esperada para un pool long)
-    log = syncPools(log, "BTCUSDT", [], 99_500 * 1.005, sweptAt + 16 * 60_000);
+    log = syncPools(log, "BTCUSDT", "perp", [], 99_500 * 1.005, sweptAt + 16 * 60_000);
     expect(log[0].outcome).toBe("reversion");
   });
 
@@ -56,15 +56,15 @@ describe("syncPools", () => {
       },
     ];
     // precio lejos del nivel, 7 h después
-    log = syncPools(log, "BTCUSDT", [], 98_000, 7 * 3600_000);
+    log = syncPools(log, "BTCUSDT", "perp", [], 98_000, 7 * 3600_000);
     expect(log[0].status).toBe("expirado");
   });
 
   it("no duplica el mismo pool mientras está pendiente", () => {
     const clusters = [cluster(99_000, "long")];
-    let log = syncPools([], "BTCUSDT", clusters, 100_000, 1000);
+    let log = syncPools([], "BTCUSDT", "perp", clusters, 100_000, 1000);
     const before = log.filter((r) => !r.isControl).length;
-    log = syncPools(log, "BTCUSDT", clusters, 100_000, 2000);
+    log = syncPools(log, "BTCUSDT", "perp", clusters, 100_000, 2000);
     const after = log.filter((r) => !r.isControl).length;
     expect(after).toBe(before);
   });
@@ -73,6 +73,7 @@ describe("syncPools", () => {
     const log = syncPools(
       [],
       "BTCUSDT",
+      "perp",
       [
         cluster(100_010, "long"),  // 0,01 % — pegado al precio
         cluster(100_500, "short"), // 0,5 %
@@ -93,6 +94,7 @@ describe("syncPools", () => {
     const log = syncPools(
       [],
       "BTCUSDT",
+      "perp",
       [
         cluster(100_060, "long"),  // 0,06 %
         cluster(100_120, "short"), // 0,12 %
