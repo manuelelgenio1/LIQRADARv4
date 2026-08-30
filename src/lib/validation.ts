@@ -27,10 +27,29 @@ export interface PoolRecord {
 
 const LS_KEY = "liqradar:poolog:v1";
 const MAX_RECORDS = 240;
-const SWEEP_TOL = 0.0012;   // ±0,12 % para considerar un nivel "tocado"
+const SWEEP_TOL = 0.0012;   // ±0,12 % — tolerancia MÁXIMA de barrido
 const RESOLVE_MS = 15 * 60_000;  // 15 min para clasificar el resultado
 const EXPIRE_MS = 6 * 3600_000;  // 6 h sin barrer → expirado
-const MOVE_PCT = 0.4;       // rebote mínimo (%) para clasificar reversión
+const MOVE_PCT = 0.4;       // rebote MÁXIMO (%) para clasificar reversión
+
+// ---------- umbrales ADAPTATIVOS (sin sesgo por temporalidad) ----------
+// Los pools están a distancias muy distintas según el timeframe (0,05 % en 1m,
+// 2 % en 1D). Usar tolerancias absolutas sesga las métricas: en 1m un pool nace
+// ya "barrido" (tolerancia > distancia) y nunca "revierte" (umbral inalcanzable).
+// Cada umbral escala con la distancia propia del pool, con un piso/suelo sensato.
+
+// Distancia inicial del pool respecto al precio de detección (fracción).
+const initDist = (r: PoolRecord): number =>
+  r.detectedPrice > 0 ? Math.abs(r.price - r.detectedPrice) / r.detectedPrice : 0;
+
+// Tolerancia de barrido: nunca mayor que la distancia del pool (evita el
+// "barrido instantáneo"), acotada al máximo global.
+const sweepTolFor = (r: PoolRecord): number =>
+  Math.min(SWEEP_TOL, Math.max(SWEEP_TOL * 0.15, initDist(r) * 0.45));
+
+// Umbral de reversión (%): escala con la distancia del pool, piso de 0,15 %.
+const moveThrFor = (r: PoolRecord): number =>
+  Math.min(MOVE_PCT, Math.max(0.15, initDist(r) * 100 * 0.5));
 
 export function loadPoolLog(): PoolRecord[] {
   try {
@@ -75,7 +94,8 @@ export function syncPools(
   for (const r of log) {
     if (r.symbol !== symbol) continue;
     if (r.status === "pendiente") {
-      const touched = Math.abs(price - r.price) / r.price <= SWEEP_TOL;
+      // tolerancia adaptativa: nunca mayor que la distancia propia del pool
+      const touched = Math.abs(price - r.price) / r.price <= sweepTolFor(r);
       if (touched) {
         r.status = "barrido";
         r.sweptAt = now;
@@ -87,10 +107,12 @@ export function syncPools(
       }
     } else if (r.status === "barrido" && !r.outcome && r.sweptAt && now - r.sweptAt >= RESOLVE_MS) {
       const rel = ((price - (r.sweptPrice ?? r.price)) / (r.sweptPrice ?? r.price)) * 100;
+      // umbral de reversión adaptativo: escala con la distancia del pool
+      const thr = moveThrFor(r);
       if (r.side === "long") {
-        r.outcome = rel > MOVE_PCT ? "reversion" : rel < -MOVE_PCT ? "continuacion" : "neutral";
+        r.outcome = rel > thr ? "reversion" : rel < -thr ? "continuacion" : "neutral";
       } else {
-        r.outcome = rel < -MOVE_PCT ? "reversion" : rel > MOVE_PCT ? "continuacion" : "neutral";
+        r.outcome = rel < -thr ? "reversion" : rel > thr ? "continuacion" : "neutral";
       }
       r.resolvedAt = now;
       dirty = true;
@@ -105,8 +127,12 @@ export function syncPools(
   const withDist = clusters.map((c) => ({ c, dist: Math.abs(c.price - price) / price }));
   const sortedDists = withDist.map((d) => d.dist).sort((a, b) => a - b);
   const median = sortedDists[Math.floor(sortedDists.length / 2)] || 0.003;
-  const minDist = Math.min(0.0015, median * 0.25);
+  const minDist = Math.max(SWEEP_TOL / 3, Math.min(0.0015, median * 0.25));
   const maxDist = Math.max(0.045, median * 4);
+  // dedup relativo al espaciado real de los clústeres: en 1m los pools legítimos
+  // están a ~0,05 % entre sí, así que una ventana absoluta de 0,3 % los
+  // deduplicaría a todos. Se acota a la mitad de la distancia mediana.
+  const dedupTol = Math.min(0.003, Math.max(0.0004, median * 0.5));
   const cands = withDist
     .filter((d) => d.dist > minDist && d.dist < maxDist)
     .sort((a, b) => b.c.sizeUsd - a.c.sizeUsd)
@@ -121,7 +147,7 @@ export function syncPools(
       (r) =>
         r.symbol === symbol &&
         r.side === c.side &&
-        Math.abs(r.price - c.price) / c.price < 0.003 &&
+        Math.abs(r.price - c.price) / c.price < dedupTol &&
         (r.status === "pendiente" ||
           (r.status === "barrido" && r.sweptAt != null && now - r.sweptAt < 3600_000))
     );

@@ -71,6 +71,37 @@ export default function ValidationLab({ log, stats, symbol, decimals, lastSync }
 
   const stackTotal = Math.max(1, stats.pending + stats.swept + stats.expired);
 
+  // ---- veredicto central: ¿el radar bate al azar? ----
+  const verdict = (() => {
+    if (!Number.isFinite(stats.hitRate) || !Number.isFinite(stats.controlHitRate))
+      return { label: "MIDIENDO", tone: "mist", note: "Esperando pools y controles resueltos…" };
+    const d = (stats.hitRate - stats.controlHitRate) * 100;
+    if (d >= 10) return { label: "SEÑAL REAL", tone: "long", note: `Los pools barren ${d.toFixed(0)} pts más que el azar` };
+    if (d <= -5) return { label: "PEOR QUE AZAR", tone: "short", note: `Los controles barren más que los pools (Δ ${d.toFixed(0)} pts)` };
+    return { label: "SIN VENTAJA AÚN", tone: "flare", note: `Pools y controles empatados (Δ ${d.toFixed(0)} pts)` };
+  })();
+
+  // ---- evidencia acumulada: tasa de barrido a lo largo del tiempo ----
+  const trendPoints = (() => {
+    const resolvedReal = log.filter((r) => !r.isControl && (r.status === "barrido" || r.status === "expirado"));
+    if (resolvedReal.length < 3) return [];
+    const chrono = [...resolvedReal].reverse(); // el log es newest-first → invertir a cronológico
+    let hits = 0;
+    const pts: number[] = [];
+    for (const r of chrono) {
+      if (r.status === "barrido") hits++;
+      pts.push(hits / (pts.length + 1));
+    }
+    return pts;
+  })();
+
+  const VERDICT_META: Record<string, string> = {
+    long: "text-long-300 border-long-500/50 bg-long-900/40",
+    short: "text-short-300 border-short-500/50 bg-short-900/40",
+    flare: "text-flare-300 border-flare-400/50 bg-flare-400/10",
+    mist: "text-mist-400 border-ink-600 bg-ink-800",
+  };
+
   return (
     <section className="panel panel-corner anim-reveal" style={{ animationDelay: "0.6s" }}>
       <header className="flex flex-wrap items-center gap-3 border-b border-ink-700/50 px-4 py-3">
@@ -100,6 +131,45 @@ export default function ValidationLab({ log, stats, symbol, decimals, lastSync }
       <div className="grid grid-cols-1 lg:grid-cols-12">
         {/* ---- métricas del track record ---- */}
         <div className="grid grid-cols-2 gap-px border-b border-ink-700/50 bg-ink-700/30 sm:grid-cols-4 lg:col-span-4 lg:border-b-0 lg:border-r">
+          {/* ---- veredicto: ¿el radar bate al azar? ---- */}
+          <div className="col-span-2 bg-ink-900/60 px-4 py-3 sm:col-span-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-mist-600">
+                ¿El radar bate al azar?
+              </div>
+              <span className={`border px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${VERDICT_META[verdict.tone]}`}>
+                {verdict.label}
+              </span>
+            </div>
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="w-16 shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">Pools</span>
+                <div className="h-2 flex-1 overflow-hidden bg-ink-800">
+                  <div
+                    className="h-full bg-long-400/85 transition-all duration-700"
+                    style={{ width: `${Number.isFinite(stats.hitRate) ? stats.hitRate * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="tick-num w-10 shrink-0 text-right font-mono text-[9.5px] font-bold text-long-300">
+                  {pct(stats.hitRate)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">Azar</span>
+                <div className="h-2 flex-1 overflow-hidden bg-ink-800">
+                  <div
+                    className="h-full bg-mist-500/70 transition-all duration-700"
+                    style={{ width: `${Number.isFinite(stats.controlHitRate) ? stats.controlHitRate * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="tick-num w-10 shrink-0 text-right font-mono text-[9.5px] font-bold text-mist-400">
+                  {pct(stats.controlHitRate)}
+                </span>
+              </div>
+            </div>
+            <p className="mt-1.5 font-mono text-[8.5px] text-mist-600">{verdict.note}</p>
+          </div>
+
           <div className="bg-ink-900/60 px-4 py-3">
             <div className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-mist-600">Tasa de barrido</div>
             <div className="tick-num mt-1 font-display text-2xl font-bold text-mist-100">{pct(stats.hitRate)}</div>
@@ -158,6 +228,34 @@ export default function ValidationLab({ log, stats, symbol, decimals, lastSync }
               <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 bg-ink-600" />expirado</span>
               <span className="ml-auto flex items-center gap-1.5 text-mist-500"><span className="h-1.5 w-1.5 border border-dashed border-mist-500" />control = nivel al azar</span>
             </div>
+          </div>
+
+          {/* ---- tendencia de la tasa de barrido en el tiempo ---- */}
+          <div className="col-span-2 bg-ink-900/60 px-4 py-3 sm:col-span-4">
+            <div className="mb-1.5 flex justify-between font-mono text-[8.5px] uppercase tracking-[0.18em] text-mist-600">
+              <span>Tasa de barrido acumulada</span>
+              <span>{trendPoints.length >= 3 ? `${trendPoints.length} resueltos` : "mín. 3 resueltos"}</span>
+            </div>
+            {trendPoints.length >= 3 ? (
+              <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="h-10 w-full">
+                <line x1="0" y1={30 - 0.5 * 28} x2="100" y2={30 - 0.5 * 28} stroke="rgba(95,115,150,0.25)" strokeDasharray="2 3" />
+                <polyline
+                  points={trendPoints.map((v, i) => `${(i / (trendPoints.length - 1)) * 100},${30 - v * 28}`).join(" ")}
+                  fill="none" stroke="#2de0c0" strokeWidth="1.5" vectorEffect="non-scaling-stroke"
+                />
+                <polygon
+                  points={`0,30 ${trendPoints.map((v, i) => `${(i / (trendPoints.length - 1)) * 100},${30 - v * 28}`).join(" ")} 100,30`}
+                  fill="rgba(45,224,192,0.10)"
+                />
+              </svg>
+            ) : (
+              <p className="py-2 font-mono text-[9px] text-mist-600">
+                Aún no hay suficientes pools resueltos para trazar la tendencia. La línea aparecerá con el track record.
+              </p>
+            )}
+            <p className="mt-1 font-mono text-[8.5px] text-mist-600">
+              Si la línea se mantiene alta y estable, la ventaja del radar es persistente; si decae, es ruido.
+            </p>
           </div>
         </div>
 
