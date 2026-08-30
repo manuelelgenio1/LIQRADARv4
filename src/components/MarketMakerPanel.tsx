@@ -8,6 +8,7 @@ interface Props {
   ind: IndicatorBundle;
   cfg: IndicatorCfg;
   confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
+  market?: "perp" | "spot";
 }
 
 const PHASES = [
@@ -26,7 +27,7 @@ interface Rung {
   isSpot: boolean;
 }
 
-export default function MarketMakerPanel({ state, ind, cfg, confluence }: Props) {
+export default function MarketMakerPanel({ state, ind, cfg, confluence, market = "perp" }: Props) {
   const cur = state.candles[state.candles.length - 1].c;
   const target = state.clusters[0];
   if (!target) return null;
