@@ -321,7 +321,19 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     return () => window.clearInterval(id);
   }, []);
   const intervalMs = tfMin * 60_000;
-  const candleStart = Math.floor(nowTs / intervalMs) * intervalMs;
+  // inicio de la vela actual alineado al reloj UTC. La época Unix (1-ene-1970)
+  // fue jueves, así que para velas semanales (que en Binance empiezan el lunes
+  // 00:00 UTC) el alineado a época daría un límite desplazado 4 días; se corrige
+  // calculando el lunes de la semana en curso.
+  const candleStart = (() => {
+    if (tfMin === 10080) {
+      const d = new Date(nowTs);
+      const daysSinceMonday = (d.getUTCDay() + 6) % 7; // lunes=0 … domingo=6
+      d.setUTCHours(0, 0, 0, 0);
+      return d.getTime() - daysSinceMonday * 86_400_000;
+    }
+    return Math.floor(nowTs / intervalMs) * intervalMs;
+  })();
   const remainMs = Math.max(0, intervalMs - (nowTs - candleStart));
   const remainStr = (() => {
     const s = Math.floor(remainMs / 1000);
