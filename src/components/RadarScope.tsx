@@ -14,7 +14,7 @@ export default function RadarScope({ state }: Props) {
   const cur = state.candles[state.candles.length - 1].c;
   const span = state.pMax - state.pMin;
 
-  const blips = state.clusters.slice(0, 8).map((cl, i) => {
+  const blips = state.clusters.slice(0, 12).map((cl, i) => {
     const dist = Math.abs(cl.price - cur) / span;
     const r = 26 + Math.min(1, dist * 2.6) * 116;
     const jitter = (hashStr(cl.id) % 100) / 100;

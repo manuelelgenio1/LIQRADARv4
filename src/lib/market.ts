@@ -226,8 +226,18 @@ export function deriveClusters(
   // del rango visible (span), no por porcentaje absoluto del precio. Así el
   // espectro completo (x100…x5) aparece en CUALQUIER temporalidad: en 1m el
   // rango es diminuto, así que medimos la distancia relativa a ese rango.
+  //
+  // BANDAS: centros de cada escalón de apalancamiento, dentro del rango
+  // visible, para que el radar muestre SIEMPRE los 5 niveles a cada lado.
+  const BANDS: { lev: string; frac: number }[] = [
+    { lev: "x100", frac: 0.07 },
+    { lev: "x50", frac: 0.16 },
+    { lev: "x20", frac: 0.27 },
+    { lev: "x10", frac: 0.39 },
+    { lev: "x5", frac: 0.49 },
+  ];
   const levFromFrac = (frac: number): string =>
-    frac < 0.12 ? "x100" : frac < 0.24 ? "x50" : frac < 0.38 ? "x20" : frac < 0.55 ? "x10" : "x5";
+    frac < 0.115 ? "x100" : frac < 0.215 ? "x50" : frac < 0.33 ? "x20" : frac < 0.44 ? "x10" : "x5";
 
   // perfil vertical reciente (últimas 14 velas)
   const W = 14;
@@ -269,28 +279,30 @@ export function deriveClusters(
     if (clusters.length >= 9) break;
   }
 
-  // garantía: al menos 3 piscinas a cada lado del precio
-  const ensure = (side: "long" | "short", count: number) => {
-    const have = clusters.filter((c) => c.side === side).length;
-    for (let i = 0; i < count - have; i++) {
-      // distancia como FRACCIÓN del rango visible → siempre dentro del gráfico,
-      // distribuida a lo largo del radar (x100 cerca → x10 lejos)
-      const frac = 0.06 + i * 0.18 + ((hashStr(meta.symbol + side + i) % 100) / 100) * 0.08;
+  // garantía: CADA escalón de apalancamiento (x100…x5) presente en AMBOS lados
+  // del precio, independientemente de lo que aporte el calor. Así el radar y el
+  // gráfico siempre muestran el espectro completo en cualquier temporalidad.
+  for (const side of ["long", "short"] as const) {
+    for (let bi = 0; bi < BANDS.length; bi++) {
+      const band = BANDS[bi];
+      // si el calor ya aportó un clúster de este lado y escalón, no duplicar
+      const exists = clusters.some((c) => c.side === side && c.leverage === band.lev);
+      if (exists) continue;
+      const jitter = ((hashStr(meta.symbol + side + band.lev) % 100) / 100) * 0.06 - 0.03;
+      const frac = band.frac + jitter;
       const offset = frac * span;
       const price = side === "long" ? lastC - offset : lastC + offset;
       clusters.push({
-        id: `sy-${meta.symbol}-${side}-${i}`,
+        id: `sy-${meta.symbol}-${side}-${band.lev}`,
         price,
         side,
-        sizeUsd: meta.liqScale * 1e6 * (0.5 + ((hashStr(meta.symbol + side + i) % 100) / 100) * 1.3),
-        strength: 0.4 + ((hashStr(side + i + meta.symbol) % 100) / 100) * 0.45,
-        leverage: levFromFrac(frac),
-        exchange: EXCHANGES[(i + 1) % 3],
+        sizeUsd: meta.liqScale * 1e6 * (0.5 + ((hashStr(meta.symbol + side + band.lev) % 100) / 100) * 1.3),
+        strength: 0.4 + ((hashStr(side + band.lev + meta.symbol) % 100) / 100) * 0.45,
+        leverage: band.lev,
+        exchange: EXCHANGES[(bi + 1) % 3],
       });
     }
-  };
-  ensure("long", 3);
-  ensure("short", 3);
+  }
 
   return clusters.sort((a, z) => Math.abs(a.price - lastC) - Math.abs(z.price - lastC));
 }
