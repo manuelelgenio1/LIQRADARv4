@@ -221,6 +221,14 @@ export function deriveClusters(
 ): LiqCluster[] {
   const lastC = candles[candles.length - 1].c;
   const span = pMax - pMin || 1;
+
+  // El apalancamiento se clasifica por la distancia del clúster COMO FRACCIÓN
+  // del rango visible (span), no por porcentaje absoluto del precio. Así el
+  // espectro completo (x100…x5) aparece en CUALQUIER temporalidad: en 1m el
+  // rango es diminuto, así que medimos la distancia relativa a ese rango.
+  const levFromFrac = (frac: number): string =>
+    frac < 0.12 ? "x100" : frac < 0.24 ? "x50" : frac < 0.38 ? "x20" : frac < 0.55 ? "x10" : "x5";
+
   // perfil vertical reciente (últimas 14 velas)
   const W = 14;
   const profile = new Float64Array(HEAT_BINS);
@@ -244,18 +252,18 @@ export function deriveClusters(
     if (used.some((u) => Math.abs(u - p.bin) < 4)) continue;
     used.push(p.bin);
     const price = pMin + ((p.bin + 0.5) / HEAT_BINS) * span;
-    if (Math.abs(price - lastC) / lastC < 0.0018) continue;
+    // distancia como fracción del rango visible
+    const frac = Math.abs(price - lastC) / span;
+    // omite clústeres pegados al precio (< 5% del rango visible)
+    if (frac < 0.05) continue;
     const side: "long" | "short" = price < lastC ? "long" : "short";
-    const distPct = Math.abs(price - lastC) / lastC;
-    const lev =
-      distPct < 0.012 ? "x100" : distPct < 0.025 ? "x50" : distPct < 0.055 ? "x20" : distPct < 0.11 ? "x10" : "x5";
     clusters.push({
       id: `cl-${meta.symbol}-${p.bin}`,
       price,
       side,
-      sizeUsd: p.v * meta.liqScale * 1e6 * (1.6 + distPct * 10),
+      sizeUsd: p.v * meta.liqScale * 1e6 * (1.6 + frac * 6),
       strength: Math.min(1, p.v / heatMax),
-      leverage: lev,
+      leverage: levFromFrac(frac),
       exchange: EXCHANGES[p.bin % 3],
     });
     if (clusters.length >= 9) break;
@@ -265,16 +273,18 @@ export function deriveClusters(
   const ensure = (side: "long" | "short", count: number) => {
     const have = clusters.filter((c) => c.side === side).length;
     for (let i = 0; i < count - have; i++) {
-      const distPct = 0.006 + ((i + 1) * 0.011 + (hashStr(meta.symbol + side + i) % 100) / 100 * 0.006);
-      const price = side === "long" ? lastC * (1 - distPct) : lastC * (1 + distPct);
-      const lev = distPct < 0.012 ? "x100" : distPct < 0.025 ? "x50" : distPct < 0.055 ? "x20" : "x10";
+      // distancia como FRACCIÓN del rango visible → siempre dentro del gráfico,
+      // distribuida a lo largo del radar (x100 cerca → x10 lejos)
+      const frac = 0.06 + i * 0.18 + ((hashStr(meta.symbol + side + i) % 100) / 100) * 0.08;
+      const offset = frac * span;
+      const price = side === "long" ? lastC - offset : lastC + offset;
       clusters.push({
         id: `sy-${meta.symbol}-${side}-${i}`,
         price,
         side,
         sizeUsd: meta.liqScale * 1e6 * (0.5 + ((hashStr(meta.symbol + side + i) % 100) / 100) * 1.3),
         strength: 0.4 + ((hashStr(side + i + meta.symbol) % 100) / 100) * 0.45,
-        leverage: lev,
+        leverage: levFromFrac(frac),
         exchange: EXCHANGES[(i + 1) % 3],
       });
     }

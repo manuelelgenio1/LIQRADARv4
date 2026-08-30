@@ -98,13 +98,20 @@ export function syncPools(
   }
 
   // ---- 2 · registrar pools nuevos detectados por el radar ----
-  const cands = clusters
-    .filter((c) => {
-      const dist = Math.abs(c.price - price) / price;
-      return dist > 0.0015 && dist < 0.045;
-    })
-    .sort((a, b) => b.sizeUsd - a.sizeUsd)
-    .slice(0, 6);
+  // Umbrales ADAPTATIVOS: los clústeres ya vienen distribuidos relativos al
+  // rango de la temporalidad, así que la "distancia significativa" mínima debe
+  // escalar con ellos (en 1m los pools legítimos están mucho más cerca en %
+  // absoluto que en 1D). Se toma la mediana de distancias como referencia.
+  const withDist = clusters.map((c) => ({ c, dist: Math.abs(c.price - price) / price }));
+  const sortedDists = withDist.map((d) => d.dist).sort((a, b) => a - b);
+  const median = sortedDists[Math.floor(sortedDists.length / 2)] || 0.003;
+  const minDist = Math.min(0.0015, median * 0.25);
+  const maxDist = Math.max(0.045, median * 4);
+  const cands = withDist
+    .filter((d) => d.dist > minDist && d.dist < maxDist)
+    .sort((a, b) => b.c.sizeUsd - a.c.sizeUsd)
+    .slice(0, 6)
+    .map((d) => d.c);
 
   let registered = 0;
   for (const c of cands) {

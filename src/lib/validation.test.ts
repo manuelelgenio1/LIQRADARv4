@@ -69,15 +69,40 @@ describe("syncPools", () => {
     expect(after).toBe(before);
   });
 
-  it("ignora pools fuera de la ventana de distancia (demasiado cerca o lejos)", () => {
+  it("ignora pools pegados al precio respecto a la dispersión del resto", () => {
     const log = syncPools(
       [],
       "BTCUSDT",
-      [cluster(99_999, "long"), cluster(106_000, "short")], // 0,001% y 6%
+      [
+        cluster(100_010, "long"),  // 0,01 % — pegado al precio
+        cluster(100_500, "short"), // 0,5 %
+        cluster(99_400, "long"),   // 0,6 %
+        cluster(101_200, "short"), // 1,2 %
+      ],
       100_000,
       1000
     );
-    expect(log.filter((r) => !r.isControl)).toHaveLength(0);
+    const prices = log.filter((r) => !r.isControl).map((r) => Math.round(r.price));
+    expect(prices).not.toContain(100_010); // el pool pegado se descarta
+    expect(prices.length).toBeGreaterThan(0); // los demás sí se registran
+  });
+
+  it("registra pools en la escala de temporalidades bajas (distancias absolutas pequeñas)", () => {
+    // En 1m/5m los clústeres legítimos están a <0,2 % del precio. El filtro
+    // adaptativo debe aceptarlos (antes el umbral fijo de 0,15 % los excluía).
+    const log = syncPools(
+      [],
+      "BTCUSDT",
+      [
+        cluster(100_060, "long"),  // 0,06 %
+        cluster(100_120, "short"), // 0,12 %
+        cluster(99_920, "long"),   // 0,08 %
+        cluster(100_200, "short"), // 0,20 %
+      ],
+      100_000,
+      1000
+    );
+    expect(log.filter((r) => !r.isControl).length).toBeGreaterThan(0);
   });
 });
 
