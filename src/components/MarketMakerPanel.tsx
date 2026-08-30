@@ -58,7 +58,22 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence }: Props)
   const hi = rungs[0].price;
   const lo = rungs[rungs.length - 1].price;
   const rungSpan = hi - lo || 1;
-  const posOf = (p: number) => ((hi - p) / rungSpan) * 100; // % desde arriba
+  // mapeo 4%..96% para que ningún peldaño se recorte en los bordes
+  const posOf = (p: number) => 4 + ((hi - p) / rungSpan) * 92;
+
+  // layout anti-solape: cada fila necesita ~9% de separación mínima; si los
+  // precios están muy juntos, redistribuir uniformemente para que NUNCA se
+  // pisen (los precios van etiquetados, así que no se pierde información).
+  const layout = rungs.map((r) => ({ r, top: posOf(r.price) }));
+  for (let i = 1; i < layout.length; i++) {
+    if (layout[i].top < layout[i - 1].top + 9) layout[i].top = layout[i - 1].top + 9;
+  }
+  if (layout.length > 1 && layout[layout.length - 1].top > 96) {
+    layout.forEach((l, i) => {
+      l.top = 4 + (i * 92) / (layout.length - 1);
+    });
+  }
+  const topOf = (id: string) => layout.find((l) => l.r.id === id)?.top ?? 50;
 
   // ---- factores de probabilidad (transparentes, derivados de datos reales) ----
   const thr = adxThrOf(cfg);
@@ -87,7 +102,8 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence }: Props)
   // sesgo combinado (media simple, claramente etiquetado como derivado)
   const bias = factors.reduce((s, f) => s + f.v, 0) / factors.length;
 
-  const spotTop = posOf(cur);
+  const spotTop = topOf("spot");
+  const targetTop = topOf(target.id);
 
   return (
     <section className="panel panel-corner anim-reveal flex h-full flex-col" style={{ animationDelay: "0.42s" }}>
@@ -112,25 +128,24 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence }: Props)
         </span>
       </header>
 
-      <div className="grid flex-1 grid-cols-[130px_1fr] gap-4 px-4 py-4">
+      <div className="grid flex-1 grid-cols-[184px_1fr] gap-4 px-4 py-4">
         {/* ---- escalera de liquidez (posición real por precio) ---- */}
-        <div className="relative min-h-[230px]">
+        <div className="relative min-h-[240px]">
           {/* carril vertical */}
           <div className="absolute left-[7px] top-0 h-full w-px bg-ink-700/70" />
           {/* trayectoria spot → objetivo */}
           <div
             className="absolute left-[7px] w-px"
             style={{
-              top: `${Math.min(spotTop, posOf(target.price))}%`,
-              height: `${Math.abs(posOf(target.price) - spotTop)}%`,
+              top: `${Math.min(spotTop, targetTop)}%`,
+              height: `${Math.abs(targetTop - spotTop)}%`,
               background: col,
               opacity: 0.8,
               backgroundImage: "repeating-linear-gradient(180deg, transparent, transparent 4px, rgba(7,12,22,0.9) 4px, rgba(7,12,22,0.9) 8px)",
               animation: "dashFlow 1.4s linear infinite",
             }}
           />
-          {rungs.map((r) => {
-            const top = posOf(r.price);
+          {layout.map(({ r, top }) => {
             if (r.isSpot) {
               return (
                 <div key={r.id} className="absolute left-0 right-0 -translate-y-1/2" style={{ top: `${top}%` }}>
