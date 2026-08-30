@@ -29,6 +29,7 @@ interface Props {
   ind: IndicatorBundle;   // calculado UNA vez en el Dashboard (hook compartido)
   cfg: IndicatorCfg;
   confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
+  market?: "perp" | "spot";
 }
 
 const H = 560;
@@ -284,7 +285,7 @@ const REGIME_TONE: Record<LiqRegime["tone"], string> = {
   flat: "border-ink-600 bg-ink-800 text-mist-400",
 };
 
-export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd, ind, cfg, confluence }: Props) {
+export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd, ind, cfg, confluence, market = "perp" }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const offRef = useRef<HTMLCanvasElement | null>(null);
@@ -1323,7 +1324,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
               {fullscreen && <span className="ml-2 text-long-400">· pantalla completa</span>}
             </h2>
             <p className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-              <b className="text-mist-300">{state.meta.symbol}</b> · perp · energía por nivel
+              <b className="text-mist-300">{state.meta.symbol}</b> · {market === "perp" ? "perp" : "spot"} · energía por nivel
             </p>
           </div>
         </div>

@@ -11,6 +11,7 @@ import {
   SYMBOLS,
   TIMEFRAMES,
   CANDLE_COUNT,
+  type Candle,
   type MarketState,
   type SymbolMeta,
   type LiquidationEvent,
@@ -52,6 +53,20 @@ export interface Toast {
 // velas usadas como semilla de los indicadores (no se dibujan todas)
 const WARMUP_COUNT = 500;
 
+// mercado fuente: futuros (el precio del perpetuo, donde ocurren las
+// liquidaciones) o spot (fallback sin restricciones geográficas)
+export type MarketKind = "perp" | "spot";
+const MKT_KEY = "liqradar:market:v1";
+function loadMarket(): MarketKind {
+  try {
+    const v = localStorage.getItem(MKT_KEY);
+    if (v === "spot" || v === "perp") return v;
+  } catch {
+    /* valores por defecto */
+  }
+  return "perp";
+}
+
 // ---------- persistencia de selecciones ----------
 const LS_KEY = "liqradar:prefs:v1";
 const CAL_KEY = "liqradar:calibration:v1";
@@ -83,6 +98,19 @@ export function useMarketEngine() {
   const [symbol, setSymbol] = useState(prefs.symbol);
   const [tfKey, setTfKey] = useState(prefs.tfKey);
   const [paused, setPaused] = useState(prefs.paused);
+
+  // mercado fuente de los datos (persistido; los efectos lo leen por ref)
+  const [market, setMarketState] = useState<MarketKind>(loadMarket);
+  const marketRef = useRef<MarketKind>(market);
+  marketRef.current = market;
+  const setMarket = (m: MarketKind) => {
+    setMarketState(m);
+    try {
+      localStorage.setItem(MKT_KEY, m);
+    } catch {
+      /* sin almacenamiento */
+    }
+  };
   const [source, setSource] = useState<Source>("connecting");
   const [livePrices, setLivePrices] = useState<Record<string, TickerInfo>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -184,14 +212,26 @@ export function useMarketEngine() {
       try {
         // semilla extendida: 500 velas reales para calentar los indicadores;
         // el gráfico dibuja solo las últimas CANDLE_COUNT.
-        const warmKl = await fetchKlines(symbol, toBinanceInterval(tfKey), WARMUP_COUNT);
+        const fut = market === "perp";
+        let warmKl: Candle[];
+        try {
+          warmKl = await fetchKlines(symbol, toBinanceInterval(tfKey), WARMUP_COUNT, fut);
+        } catch {
+          // futuros no disponible (bloqueo regional/CORS) → caer a spot
+          if (fut) {
+            warmKl = await fetchKlines(symbol, toBinanceInterval(tfKey), WARMUP_COUNT, false);
+            if (!cancelled) setMarket("spot");
+          } else {
+            throw new Error("sin velas");
+          }
+        }
         if (cancelled) return;
         const klines = warmKl.slice(-CANDLE_COUNT);
         let st = marketFromKlines(m, tf, klines, seed);
         st = { ...st, warm: warmKl };
         try {
           const [depth, fo, ls] = await Promise.allSettled([
-            fetchDepth(symbol),
+            fetchDepth(symbol, marketRef.current === "perp"),
             fetchFundingOi(symbol),
             fetchLongShortRatio(symbol),
           ]);
@@ -223,11 +263,13 @@ export function useMarketEngine() {
     return () => {
       cancelled = true;
     };
-  }, [symbol, tfKey]);
+  }, [symbol, tfKey, market]);
 
   // ---------- precios reales en tiempo real (websocket, todos los símbolos) ----------
   useEffect(() => {
-    return connectTickers(SYMBOLS.map((s) => s.symbol), (t) => {
+    return connectTickers(
+      SYMBOLS.map((s) => s.symbol),
+      (t) => {
       setLivePrices((p) => ({ ...p, [t.symbol]: t }));
       // latencia real: hora local − eventTime del servidor
       if (t.evtTime) {
@@ -241,8 +283,14 @@ export function useMarketEngine() {
       setState((s) =>
         s.meta.symbol === t.symbol ? applyLiveTick(s, t.price, tfRef.current) : s
       );
-    });
-  }, []);
+      },
+      market === "perp",
+      // si el stream de futuros no está disponible en esta región, caer a spot
+      () => {
+        if (marketRef.current === "perp") setMarket("spot");
+      }
+    );
+  }, [market]);
 
   // ---------- trades reales (aggTrade) → CVD real ----------
   useEffect(() => {
@@ -252,13 +300,17 @@ export function useMarketEngine() {
     tradeDeltaRef.current = 0;
     setRealCvd(false);
     let got = 0;
-    return connectTrades(symbol, (delta) => {
-      tradeDeltaRef.current += delta;
-      got += 1;
-      // tras 40 trades confirmamos que el stream está vivo
-      if (got === 40) setRealCvd(true);
-    });
-  }, [source, symbol, paused]);
+    return connectTrades(
+      symbol,
+      (delta) => {
+        tradeDeltaRef.current += delta;
+        got += 1;
+        // tras 40 trades confirmamos que el stream está vivo
+        if (got === 40) setRealCvd(true);
+      },
+      marketRef.current === "perp"
+    );
+  }, [source, symbol, paused, market]);
 
   // ---------- liquidaciones REALES de OKX (buffer → inyección periódica) ----------
   useEffect(() => {
@@ -303,7 +355,7 @@ export function useMarketEngine() {
 
     const bookId = window.setInterval(async () => {
       try {
-        const d = await fetchDepth(symbol);
+        const d = await fetchDepth(symbol, marketRef.current === "perp");
         setState((s) => (s.meta.symbol === symbol ? { ...s, ...depthToState(d) } : s));
       } catch {
         /* se mantiene el último libro válido */
@@ -312,7 +364,12 @@ export function useMarketEngine() {
 
     const klineId = window.setInterval(async () => {
       try {
-        const kl = await fetchKlines(symbol, toBinanceInterval(tfKey), WARMUP_COUNT);
+        const kl = await fetchKlines(
+          symbol,
+          toBinanceInterval(tfKey),
+          WARMUP_COUNT,
+          marketRef.current === "perp"
+        );
         setState((s) =>
           s.meta.symbol === symbol
             ? { ...mergeLiveKlines(s, kl.slice(-CANDLE_COUNT)), warm: kl }
@@ -346,7 +403,7 @@ export function useMarketEngine() {
       window.clearInterval(klineId);
       window.clearInterval(foId);
     };
-  }, [source, symbol, tfKey, paused]);
+  }, [source, symbol, tfKey, paused, market]);
 
   // ---------- CONFLUENCIA MULTI-TF: tendencia en las 7 temporalidades ----------
   // COHERENCIA CON EL GRÁFICO: cada chip se calcula sobre WARMUP_COUNT (500)
@@ -577,6 +634,8 @@ export function useMarketEngine() {
     paused,
     setPaused,
     source,
+    market,
+    setMarket,
     livePrices,
     toasts,
     dismissToast,

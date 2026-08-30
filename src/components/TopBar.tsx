@@ -32,6 +32,8 @@ interface Props {
   livePrices: Record<string, TickerInfo>;
   alertsOn: boolean;
   toggleAlerts: () => void;
+  market: "perp" | "spot";
+  onMarket: (m: "perp" | "spot") => void;
 }
 
 const SOURCE_CHIP: Record<Source, { t: string; c: string }> = {
@@ -40,7 +42,7 @@ const SOURCE_CHIP: Record<Source, { t: string; c: string }> = {
   connecting: { t: "CONECTANDO…", c: "border-ink-600 bg-ink-800 text-mist-400" },
 };
 
-export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused, setPaused, source, livePrices, alertsOn, toggleAlerts }: Props) {
+export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused, setPaused, source, livePrices, alertsOn, toggleAlerts, market, onMarket }: Props) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -100,6 +102,28 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
+          {/* selector de mercado fuente: futuros (perpetuo) o spot */}
+          <div
+            className="hidden items-stretch border border-ink-700 bg-ink-850/80 sm:flex"
+            title="Fuente de los datos: PERP usa el precio del perpetuo de Binance Futuros (el que ves en tu cuenta); SPOT usa el mercado al contado. Difieren por el basis."
+          >
+            {(["perp", "spot"] as const).map((mk) => (
+              <button
+                key={mk}
+                onClick={() => onMarket(mk)}
+                className={`px-2.5 py-1.5 font-mono text-[9.5px] font-bold uppercase tracking-widest transition-all ${
+                  market === mk
+                    ? mk === "perp"
+                      ? "bg-long-500/20 text-long-300 shadow-[inset_0_-2px_0_rgba(45,224,192,0.6)]"
+                      : "bg-mist-200/15 text-mist-100 shadow-[inset_0_-2px_0_rgba(219,230,247,0.5)]"
+                    : "text-mist-600 hover:bg-ink-750 hover:text-mist-400"
+                }`}
+              >
+                {mk === "perp" ? "PERP" : "SPOT"}
+              </button>
+            ))}
+          </div>
+
           {/* precio en vivo */}
           <div className="text-right leading-none">
             <div className="flex items-baseline justify-end gap-2">
@@ -116,7 +140,8 @@ export default function TopBar({ meta, state, symbols, symbol, setSymbol, paused
               </span>
             </div>
             <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.2em] text-mist-600">
-              {source === "live" ? "perpetuo · usdt · ws en vivo" : "perpetuo · usdt"}
+              {market === "perp" ? "futuros · perp · usdt" : "spot · usdt"}
+              {source === "live" ? " · ws en vivo" : ""}
             </div>
           </div>
 

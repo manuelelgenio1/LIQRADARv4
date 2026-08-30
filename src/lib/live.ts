@@ -5,8 +5,14 @@
 // ============================================================
 import type { BookLevel, Candle } from "./market";
 
-const REST = "https://data-api.binance.vision/api/v3";
-const WS_BINANCE = "wss://data-stream.binance.vision/stream?streams=";
+// Fuentes de datos:
+//  · FUTUROS (por defecto): el precio del perpetuo, que es el que ven las
+//    cuentas de futuros y donde ocurren las liquidaciones.
+//  · SPOT (fallback): proxy público sin restricciones geográficas.
+const REST = "https://data-api.binance.vision/api/v3"; // spot
+const REST_FUT = "https://fapi.binance.com/fapi/v1"; // futuros USDⓈ-M
+const WS_BINANCE = "wss://data-stream.binance.vision/stream?streams="; // spot
+const WS_BINANCE_FUT = "wss://fstream.binance.com/stream?streams="; // futuros
 const WS_OKX = "wss://ws.okx.com:8443/ws/v5/public";
 
 const withTimeout = (ms: number) => {
@@ -69,8 +75,14 @@ export function toBinanceInterval(tfKey: string): string {
 }
 
 // ---------- velas reales ----------
-export async function fetchKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
-  const r = await fetch(`${REST}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, {
+export async function fetchKlines(
+  symbol: string,
+  interval: string,
+  limit: number,
+  futures = true
+): Promise<Candle[]> {
+  const base = futures ? REST_FUT : REST;
+  const r = await fetch(`${base}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, {
     signal: withTimeout(9000),
   });
   if (!r.ok) throw new Error(`klines ${r.status}`);
@@ -91,9 +103,10 @@ export async function fetchKlines(symbol: string, interval: string, limit: numbe
   });
 }
 
-// ---------- libro de órdenes real (spot, 15 niveles) ----------
-export async function fetchDepth(symbol: string): Promise<BookData> {
-  const r = await fetch(`${REST}/depth?symbol=${symbol}&limit=20`, { signal: withTimeout(9000) });
+// ---------- libro de órdenes real (15 niveles) ----------
+export async function fetchDepth(symbol: string, futures = true): Promise<BookData> {
+  const base = futures ? REST_FUT : REST;
+  const r = await fetch(`${base}/depth?symbol=${symbol}&limit=20`, { signal: withTimeout(9000) });
   if (!r.ok) throw new Error(`depth ${r.status}`);
   const j = (await r.json()) as { bids: [string, string][]; asks: [string, string][] };
 
@@ -214,17 +227,24 @@ export async function fetchContractValue(base: string): Promise<number | null> {
 // ---------- websocket: precios (miniTicker, todos los símbolos) ----------
 export function connectTickers(
   symbols: string[],
-  onTick: (t: TickerInfo & { evtTime?: number }) => void
+  onTick: (t: TickerInfo & { evtTime?: number }) => void,
+  futures = true,
+  onUnavailable?: () => void
 ): () => void {
   let ws: WebSocket | null = null;
   let closed = false;
   let retry = 0;
+  let everOpened = false;
+  let notified = false;
 
   const open = () => {
     if (closed) return;
     const streams = symbols.map((s) => `${s.toLowerCase()}@miniTicker`).join("/");
-    ws = new WebSocket(WS_BINANCE + streams);
-    ws.onopen = () => { retry = 0; };
+    ws = new WebSocket((futures ? WS_BINANCE_FUT : WS_BINANCE) + streams);
+    ws.onopen = () => {
+      retry = 0;
+      everOpened = true;
+    };
     ws.onmessage = (ev) => {
       try {
         const j = JSON.parse(ev.data as string) as {
@@ -241,6 +261,12 @@ export function connectTickers(
     ws.onclose = () => {
       if (!closed) {
         retry += 1;
+        // si nunca abrió tras varios intentos, el endpoint no está disponible
+        // (p. ej. bloqueo regional de fstream) → avisar para caer a spot
+        if (!everOpened && retry >= 3 && !notified) {
+          notified = true;
+          onUnavailable?.();
+        }
         window.setTimeout(open, Math.min(15000, 1200 * retry));
       }
     };
@@ -257,14 +283,18 @@ export function connectTickers(
 }
 
 // ---------- websocket: trades (aggTrade, para CVD real) ----------
-export function connectTrades(symbol: string, onDelta: (delta: number, notional: number) => void): () => void {
+export function connectTrades(
+  symbol: string,
+  onDelta: (delta: number, notional: number) => void,
+  futures = true
+): () => void {
   let ws: WebSocket | null = null;
   let closed = false;
   let retry = 0;
 
   const open = () => {
     if (closed) return;
-    ws = new WebSocket(WS_BINANCE + `${symbol.toLowerCase()}@aggTrade`);
+    ws = new WebSocket((futures ? WS_BINANCE_FUT : WS_BINANCE) + `${symbol.toLowerCase()}@aggTrade`);
     ws.onopen = () => { retry = 0; };
     ws.onmessage = (ev) => {
       try {

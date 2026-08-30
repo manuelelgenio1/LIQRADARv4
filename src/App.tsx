@@ -95,6 +95,8 @@ function Dashboard() {
         livePrices={engine.livePrices}
         alertsOn={engine.alertsOn}
         toggleAlerts={engine.toggleAlerts}
+        market={engine.market}
+        onMarket={engine.setMarket}
       />
       <TickerTape livePrices={engine.livePrices} paused={engine.paused} />
 
@@ -111,17 +113,17 @@ function Dashboard() {
         <RadarSignalPanel state={state} ind={ind} confluence={mergedConfluence} />
 
         {/* fila 1: heatmap a ANCHO COMPLETO — todo el espacio de la fila para el gráfico */}
-        <HeatmapChart
-          state={state}
-          tfKey={engine.tfKey}
-          setTfKey={engine.setTfKey}
-          timeframes={engine.timeframes}
-          realCvd={engine.realCvd}
-          ind={ind}
-          cfg={cfg}
-          confluence={mergedConfluence}
-        />
-
+            <HeatmapChart
+              state={state}
+              tfKey={engine.tfKey}
+              setTfKey={engine.setTfKey}
+              timeframes={engine.timeframes}
+              realCvd={engine.realCvd}
+              ind={ind}
+              cfg={cfg}
+              confluence={mergedConfluence}
+              market={engine.market}
+            />
         {/* fila 2: radar + consenso + market maker path — juntos bajo el heatmap */}
         <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
           <div className="xl:col-span-4">
@@ -154,7 +156,7 @@ function Dashboard() {
             <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
           </div>
           <div className="xl:col-span-4">
-            <OrderBookPanel state={state} live={engine.source === "live"} />
+            <OrderBookPanel state={state} live={engine.source === "live"} market={engine.market} />
           </div>
           <div className="md:col-span-2 xl:col-span-4">
             <ClusterList state={state} />

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { BookLevel, MarketState } from "../lib/market";
 import { fmtPrice } from "../lib/format";
 
-interface Props { state: MarketState; live: boolean; }
+interface Props { state: MarketState; live: boolean; market?: "perp" | "spot"; }
 
 function fmtQty(v: number): string {
   if (!Number.isFinite(v)) return "—";
@@ -45,7 +45,7 @@ function Row({ lv, max, side, decimals, source }: { lv: BookLevel; max: number; 
   );
 }
 
-export default function OrderBookPanel({ state, live }: Props) {
+export default function OrderBookPanel({ state, live, market = "perp" }: Props) {
   const { bids, asks, meta, imbalance, spoofing } = state;
 
   // pulso perceptible cada vez que llega un snapshot nuevo del libro en vivo
@@ -101,7 +101,9 @@ export default function OrderBookPanel({ state, live }: Props) {
             )}
           </h2>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            {live ? "depth real · binance spot · 1.5 s" : "binance · bybit · okx"}
+            {live
+              ? `depth real · binance ${market === "perp" ? "futuros" : "spot"} · 1.5 s`
+              : "binance · bybit · okx"}
           </p>
         </div>
         <span
