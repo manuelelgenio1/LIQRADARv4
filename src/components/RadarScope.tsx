@@ -8,6 +8,19 @@ interface Props { state: MarketState; }
 const S = 320;
 const C = S / 2;
 
+// Cada anillo del radar ES una zona de apalancamiento. Se usa la MISMA fórmula
+// que posiciona los blips, de modo que cada clúster cae exactamente sobre su
+// anillo (x100 cerca del precio → x5 en el borde). Sin etiquetas de distancia
+// falsas: el radio comunica el apalancamiento real del pool.
+const radiusFor = (frac: number) => 26 + Math.min(1, frac * 2) * 116;
+const LEV_RINGS: { lev: string; frac: number }[] = [
+  { lev: "x100", frac: 0.07 },
+  { lev: "x50", frac: 0.16 },
+  { lev: "x20", frac: 0.27 },
+  { lev: "x10", frac: 0.39 },
+  { lev: "x5", frac: 0.49 },
+];
+
 export default function RadarScope({ state }: Props) {
   const [hovered, setHovered] = useState<{ cl: LiqCluster; x: number; y: number } | null>(null);
 
@@ -16,7 +29,7 @@ export default function RadarScope({ state }: Props) {
 
   const blips = state.clusters.slice(0, 12).map((cl, i) => {
     const dist = Math.abs(cl.price - cur) / span;
-    const r = 26 + Math.min(1, dist * 2.6) * 116;
+    const r = radiusFor(dist);
     const jitter = (hashStr(cl.id) % 100) / 100;
     // shorts arriba, longs abajo
     const angle =
@@ -41,7 +54,9 @@ export default function RadarScope({ state }: Props) {
       <header className="flex items-center gap-3 border-b border-ink-700/50 px-4 py-3">
         <div className="leading-none">
           <h2 className="font-display text-sm font-bold uppercase tracking-[0.16em] text-mist-100">Radar de liquidez</h2>
-          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">barrido de clústeres · ±2.5%</p>
+          <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
+            clústeres por apalancamiento · <span className="text-mist-400">x100 → x5</span>
+          </p>
         </div>
         <span className="ml-auto flex items-center gap-1.5 border border-long-500/40 bg-long-900/30 px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-widest text-long-300">
           <svg width="10" height="10" viewBox="0 0 10 10" className="animate-spin" style={{ animationDuration: "4.8s" }}>
@@ -64,9 +79,26 @@ export default function RadarScope({ state }: Props) {
 
             <circle cx={C} cy={C} r={148} fill="url(#scopeBg)" stroke="#1a2740" strokeWidth="1.5" />
 
-            {[40, 78, 114, 148].map((r) => (
-              <circle key={r} cx={C} cy={C} r={r} fill="none" stroke="#1a2740" strokeWidth={r === 148 ? 1.5 : 1} strokeDasharray={r === 78 ? "2 5" : undefined} />
-            ))}
+            {/* anillos = zonas de apalancamiento (x100 cerca → x5 lejos) */}
+            {LEV_RINGS.map(({ lev, frac }) => {
+              const rr = radiusFor(frac);
+              return (
+                <g key={lev}>
+                  <circle
+                    cx={C} cy={C} r={rr}
+                    fill="none" stroke="#1a2740" strokeWidth="1"
+                    strokeDasharray={lev === "x50" ? "2 5" : undefined}
+                  />
+                  <text
+                    x={C + 6} y={C - rr + 12}
+                    fill="#5f7396" fontSize="8.5" fontWeight="600"
+                    fontFamily="IBM Plex Mono, monospace"
+                  >
+                    {lev}
+                  </text>
+                </g>
+              );
+            })}
             <line x1={C} y1={12} x2={C} y2={S - 12} stroke="#1a2740" strokeWidth="1" />
             <line x1={12} y1={C} x2={S - 12} y2={C} stroke="#1a2740" strokeWidth="1" />
             {Array.from({ length: 24 }).map((_, i) => {
@@ -81,12 +113,6 @@ export default function RadarScope({ state }: Props) {
                 />
               );
             })}
-
-            {[{ r: 40, t: "0.5%" }, { r: 78, t: "1%" }, { r: 114, t: "2%" }].map((d) => (
-              <text key={d.t} x={C + 5} y={C - d.r + 11} fill="#48597a" fontSize="8.5" fontFamily="IBM Plex Mono, monospace">
-                {d.t}
-              </text>
-            ))}
             <text x={C} y={26} fill="#5f7396" fontSize="8.5" textAnchor="middle" fontFamily="IBM Plex Mono, monospace" letterSpacing="2">
               SHORTS ↑
             </text>
@@ -145,6 +171,9 @@ export default function RadarScope({ state }: Props) {
               </div>
               <div className="tick-num mt-0.5 text-mist-200">
                 {fmtPrice(hovered.cl.price, state.meta.decimals)} · {fmtUsd(hovered.cl.sizeUsd)}
+              </div>
+              <div className="tick-num mt-0.5 text-[9px] text-mist-500">
+                a {(((hovered.cl.price - cur) / cur) * 100).toFixed(2)}% del precio
               </div>
               <div className="mt-0.5 text-[9px] uppercase tracking-widest text-mist-600">{hovered.cl.exchange}</div>
             </div>
