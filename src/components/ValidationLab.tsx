@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import type { PoolRecord, PoolStats } from "../lib/validation";
-import { fmtAgo } from "../lib/validation";
+import type { BacktestResult, PoolRecord, PoolStats } from "../lib/validation";
+import { fmtAgo, runBacktest } from "../lib/validation";
 import { fmtPrice, fmtUsd } from "../lib/format";
+import type { Candle } from "../lib/market";
 
 interface Props {
   log: PoolRecord[];
@@ -9,6 +10,7 @@ interface Props {
   symbol: string;
   decimals: number;
   lastSync: number;
+  candles: Candle[]; // serie histórica (semilla warm) para el backtest
 }
 
 function pct(v: number, digits = 0): string {
@@ -51,7 +53,19 @@ function StatusBadge({ r }: { r: PoolRecord }) {
   );
 }
 
-export default function ValidationLab({ log, stats, symbol, decimals, lastSync }: Props) {
+export default function ValidationLab({ log, stats, symbol, decimals, lastSync, candles }: Props) {
+  const [bt, setBt] = useState<BacktestResult | null>(null);
+  const [btRunning, setBtRunning] = useState(false);
+
+  const runBt = () => {
+    setBtRunning(true);
+    // pequeño desfase para que el botón muestre "calculando…"
+    window.setTimeout(() => {
+      setBt(runBacktest(candles, { seed: symbol.length * 7919 + candles.length }));
+      setBtRunning(false);
+    }, 60);
+  };
+
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -125,8 +139,37 @@ export default function ValidationLab({ log, stats, symbol, decimals, lastSync }
           <span className="border border-flare-400/40 bg-flare-400/10 px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest text-flare-300">
             {stats.total} registros
           </span>
+          <button
+            onClick={runBt}
+            disabled={btRunning || candles.length < 90}
+            className="flex items-center gap-1.5 border border-long-500/50 bg-long-900/40 px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-widest text-long-300 transition-all hover:bg-long-900/70 disabled:cursor-not-allowed disabled:opacity-40"
+            title={
+              candles.length < 90
+                ? "Se necesitan al menos 90 velas históricas para el backtest"
+                : `Reproducir las últimas ${candles.length} velas y comprobar si el radar bate al azar`
+            }
+          >
+            {btRunning ? (
+              <>
+                <span className="h-2 w-2 animate-spin rounded-full border border-long-300 border-t-transparent" />
+                calculando…
+              </>
+            ) : (
+              <>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                  <path d="M3 12h4l3-8 4 16 3-8h4" />
+                </svg>
+                Backtest {candles.length}v
+              </>
+            )}
+          </button>
         </div>
       </header>
+
+      {/* ---- resultado del backtest ---- */}
+      {bt && (
+        <BacktestBlock bt={bt} symbol={symbol} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12">
         {/* ---- métricas del track record ---- */}
@@ -336,5 +379,112 @@ export default function ValidationLab({ log, stats, symbol, decimals, lastSync }
         )}
       </footer>
     </section>
+  );
+}
+
+// ============================================================
+// Bloque de resultado del backtest (validación histórica instantánea)
+// ============================================================
+function BacktestBlock({ bt, symbol }: { bt: BacktestResult; symbol: string }) {
+  const SIGNAL_META: Record<BacktestResult["signal"], { label: string; c: string; note: string }> = {
+    real: {
+      label: "Señal real",
+      c: "text-long-300 border-long-500/50 bg-long-900/40",
+      note: "Los pools del radar se barren significativamente más que los niveles al azar: el modelo aporta edge histórico.",
+    },
+    ruido: {
+      label: "Ruido",
+      c: "text-short-300 border-short-500/50 bg-short-900/40",
+      note: "Los pools se barren MENOS que el azar: en esta serie el modelo no aporta edge. Tómalo con cautela.",
+    },
+    neutral: {
+      label: "Indeterminado",
+      c: "text-mist-300 border-ink-600 bg-ink-800",
+      note: "La diferencia contra el azar no es concluyente en esta serie. Sigue recolectando o prueba otra temporalidad.",
+    },
+    insuficiente: {
+      label: "Datos insuficientes",
+      c: "text-mist-400 border-ink-600 bg-ink-800",
+      note: "No hay bastantes pools evaluados para una conclusión fiable. Usa una serie más larga.",
+    },
+  };
+  const m = SIGNAL_META[bt.signal];
+
+  const Bar = ({ v, color }: { v: number; color: string }) => (
+    <div className="h-1.5 flex-1 overflow-hidden bg-ink-700/60">
+      <div
+        className="h-full transition-all duration-700"
+        style={{ width: `${Number.isFinite(v) ? Math.min(100, v * 100) : 0}%`, background: color }}
+      />
+    </div>
+  );
+
+  return (
+    <div className="anim-reveal grid grid-cols-1 gap-4 border-b border-ink-700/50 bg-ink-900/40 px-4 py-3 lg:grid-cols-12 lg:items-center">
+      {/* veredicto */}
+      <div className="lg:col-span-3">
+        <div className="font-mono text-[8.5px] uppercase tracking-[0.18em] text-mist-600">
+          Backtest histórico · {bt.candles} velas · {symbol}
+        </div>
+        <div className={`mt-1.5 inline-flex border px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-widest ${m.c}`}>
+          {m.label}
+        </div>
+        <p className="mt-2 font-mono text-[8.5px] leading-relaxed text-mist-500">{m.note}</p>
+      </div>
+
+      {/* comparación radar vs azar */}
+      <div className="space-y-2.5 lg:col-span-5">
+        <div className="flex items-center gap-2">
+          <span className="w-[130px] shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">
+            Pools del radar
+          </span>
+          <Bar v={bt.hitRate} color="#2de0c0" />
+          <span className="tick-num w-[42px] shrink-0 text-right font-mono text-[10px] font-bold text-long-300">
+            {pct(bt.hitRate)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-[130px] shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">
+            Controles al azar
+          </span>
+          <Bar v={bt.controlHitRate} color="#5f7396" />
+          <span className="tick-num w-[42px] shrink-0 text-right font-mono text-[10px] font-bold text-mist-400">
+            {pct(bt.controlHitRate)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-[130px] shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">
+            Margen (edge)
+          </span>
+          <span
+            className={`tick-num font-mono text-[10px] font-bold ${
+              Number.isFinite(bt.margin) ? (bt.margin >= 0 ? "text-long-300" : "text-short-300") : "text-mist-500"
+            }`}
+          >
+            {Number.isFinite(bt.margin) ? `${bt.margin >= 0 ? "+" : ""}${bt.margin.toFixed(0)} pts` : "—"}
+          </span>
+        </div>
+      </div>
+
+      {/* métricas de soporte */}
+      <div className="grid grid-cols-2 gap-x-5 gap-y-1.5 font-mono text-[9px] sm:grid-cols-4 lg:col-span-4 lg:grid-cols-2">
+        <div>
+          <div className="text-[7.5px] uppercase tracking-widest text-mist-600">Pools probados</div>
+          <div className="tick-num text-[12px] font-bold text-mist-200">{bt.tested}</div>
+        </div>
+        <div>
+          <div className="text-[7.5px] uppercase tracking-widest text-mist-600">Barridos</div>
+          <div className="tick-num text-[12px] font-bold text-flare-300">{bt.swept}</div>
+        </div>
+        <div>
+          <div className="text-[7.5px] uppercase tracking-widest text-mist-600">Tasa de reversión</div>
+          <div className="tick-num text-[12px] font-bold text-mist-200">{pct(bt.reversalRate)}</div>
+        </div>
+        <div>
+          <div className="text-[7.5px] uppercase tracking-widest text-mist-600">Puntos de detección</div>
+          <div className="tick-num text-[12px] font-bold text-mist-200">{bt.steps}</div>
+        </div>
+      </div>
+    </div>
   );
 }

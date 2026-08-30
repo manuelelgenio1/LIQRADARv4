@@ -3,6 +3,7 @@ import { useMarketEngine } from "./hooks/useMarketEngine";
 import { useIndicators } from "./hooks/useIndicators";
 import TopBar from "./components/TopBar";
 import TickerTape from "./components/TickerTape";
+import RadarSignalPanel from "./components/RadarSignalPanel";
 import HeatmapChart from "./components/HeatmapChart";
 import RadarScope from "./components/RadarScope";
 import OrderBookPanel from "./components/OrderBookPanel";
@@ -106,6 +107,9 @@ function Dashboard() {
           updatedAt={engine.confluenceAt}
         />
 
+        {/* señal integrada del radar (sesgo + convicción + contribuciones) */}
+        <RadarSignalPanel state={state} ind={ind} confluence={mergedConfluence} />
+
         {/* fila 1: heatmap (8/12) + radar (4/12) — alturas igualadas */}
         <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
           <div className="xl:col-span-8">
@@ -165,13 +169,14 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* fila 4: laboratorio de validación (track record de los pools) */}
+        {/* fila 4: laboratorio de validación (track record + backtest histórico) */}
         <ValidationLab
           log={engine.poolLog}
           stats={engine.poolStats}
           symbol={engine.symbol}
           decimals={engine.meta.decimals}
           lastSync={engine.lastPoolSync}
+          candles={state.warm ?? state.candles}
         />
 
         {/* gráfica interactiva de TradingView con los indicadores del radar (al final, con su propio espacio) */}
