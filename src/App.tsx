@@ -138,7 +138,8 @@ function Dashboard() {
               cfg={cfg}
               calibration={engine.calibration}
               setCalibration={engine.setCalibration}
-              confluence={engine.confluence}
+              confluence={mergedConfluence}
+              market={engine.market}
             />
           </div>
           <div className="md:col-span-2 xl:col-span-4">

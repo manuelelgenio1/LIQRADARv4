@@ -15,6 +15,7 @@ interface Props {
   calibration?: { stAdj: number; adxThr: number };
   setCalibration?: (c: { stAdj: number; adxThr: number }) => void;
   confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
+  market?: "perp" | "spot"; // fuente de las velas del veredicto
 }
 
 const DIR_META: Record<TrendDir, { label: string; c: string; bar: string; chip: string }> = {
@@ -46,7 +47,7 @@ function DirArrow({ dir }: { dir: TrendDir }) {
   );
 }
 
-export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibration, setCalibration, confluence }: Props) {
+export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibration, setCalibration, confluence, market = "perp" }: Props) {
   const cons = ind.consensus;
   const mtf = mtfAdjust(cons, confluence);
   const meta = DIR_META[cons.dir];
@@ -95,10 +96,24 @@ export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibratio
             Consenso de tendencia
           </h2>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            5 indicadores · {tfKey} · calibrado
+            5 indicadores · {tfKey} · {market === "perp" ? "futuros" : "spot"} · calibrado
           </p>
         </div>
-        <span className={`ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${meta.chip}`}>
+        <span
+          className={`ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${
+            market === "perp"
+              ? "border-long-500/40 bg-long-900/40 text-long-300"
+              : "border-mist-500/40 bg-ink-800 text-mist-400"
+          }`}
+          title={
+            market === "perp"
+              ? "Veredicto calculado sobre velas del PERPETUO de Binance Futuros"
+              : "Veredicto calculado sobre velas del mercado SPOT"
+          }
+        >
+          {market}
+        </span>
+        <span className={`border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${meta.chip}`}>
           {bullishVotes}↑ · {bearishVotes}↓
         </span>
       </header>
