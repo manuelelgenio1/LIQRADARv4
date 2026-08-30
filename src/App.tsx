@@ -110,43 +110,22 @@ function Dashboard() {
         {/* señal integrada del radar (sesgo + convicción + contribuciones) */}
         <RadarSignalPanel state={state} ind={ind} confluence={mergedConfluence} />
 
-        {/* fila 1: heatmap (8/12) + radar (4/12) — alturas igualadas */}
-        <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
-          <div className="xl:col-span-8">
-            <HeatmapChart
-              state={state}
-              tfKey={engine.tfKey}
-              setTfKey={engine.setTfKey}
-              timeframes={engine.timeframes}
-              realCvd={engine.realCvd}
-              ind={ind}
-              cfg={cfg}
-              confluence={mergedConfluence}
-            />
-          </div>
+        {/* fila 1: heatmap a ANCHO COMPLETO — todo el espacio de la fila para el gráfico */}
+        <HeatmapChart
+          state={state}
+          tfKey={engine.tfKey}
+          setTfKey={engine.setTfKey}
+          timeframes={engine.timeframes}
+          realCvd={engine.realCvd}
+          ind={ind}
+          cfg={cfg}
+          confluence={mergedConfluence}
+        />
+
+        {/* fila 2: radar + consenso + market maker path — juntos bajo el heatmap */}
+        <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
           <div className="xl:col-span-4">
             <RadarScope state={state} />
-          </div>
-        </div>
-
-        {/* fila 2: libro + clústeres + métricas — 3 columnas iguales */}
-        <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
-          <div className="xl:col-span-4">
-            <OrderBookPanel state={state} live={engine.source === "live"} />
-          </div>
-          <div className="xl:col-span-4">
-            <ClusterList state={state} />
-          </div>
-          <div className="flex flex-col gap-4 md:col-span-2 xl:col-span-4">
-            <FundingOIPanel state={state} sentiment={engine.sentiment} />
-            <DataQualityPanel state={state} />
-          </div>
-        </div>
-
-        {/* fila 3: feed + consenso + market maker path — 3 columnas iguales */}
-        <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
-          <div className="xl:col-span-4">
-            <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
           </div>
           <div className="xl:col-span-4">
             <TrendConsensusPanel
@@ -167,6 +146,25 @@ function Dashboard() {
               confluence={mergedConfluence}
             />
           </div>
+        </div>
+
+        {/* fila 3: feed + libro + clústeres — datos en vivo */}
+        <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-12">
+          <div className="xl:col-span-4">
+            <LiquidationFeed state={state} paused={engine.paused} liqSource={engine.liqSource} />
+          </div>
+          <div className="xl:col-span-4">
+            <OrderBookPanel state={state} live={engine.source === "live"} />
+          </div>
+          <div className="md:col-span-2 xl:col-span-4">
+            <ClusterList state={state} />
+          </div>
+        </div>
+
+        {/* fila 4: funding/OI + calidad de datos — lado a lado */}
+        <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2">
+          <FundingOIPanel state={state} sentiment={engine.sentiment} />
+          <DataQualityPanel state={state} />
         </div>
 
         {/* fila 4: laboratorio de validación (track record + backtest histórico) */}

@@ -31,7 +31,7 @@ interface Props {
   confluence?: { tf: string; dir: TrendDir; strength: number }[] | null;
 }
 
-const H = 540;
+const H = 560;
 const SCALE_W = 86;
 const SUB_H = 96;
 const TIME_H = 22;
