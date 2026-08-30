@@ -31,6 +31,7 @@ import {
   type RawLiq,
 } from "../lib/live";
 import { computeIndicators, getIndicatorCfg, supertrendSeries, type TrendDir } from "../lib/indicators";
+import { playMillionLiq } from "../lib/sound";
 import {
   syncPools,
   computeStats,
@@ -545,6 +546,8 @@ export function useMarketEngine() {
     }
     if (lastEvtId.current === e.id) return;
     lastEvtId.current = e.id;
+    // sonido distintivo cuando la liquidación supera el millón de dólares
+    if (e.qtyUsd >= 1e6) playMillionLiq();
     const threshold = state.meta.liqScale * 1e6 * 0.3;
     if (e.qtyUsd >= threshold) {
       const toast: Toast = {

@@ -89,6 +89,16 @@ export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Pr
           </p>
         </div>
         <div className="ml-auto flex items-center gap-3 font-mono text-[9px] uppercase tracking-widest text-mist-600">
+          <span
+            className="flex items-center gap-1.5 border border-flare-400/40 bg-flare-400/10 px-1.5 py-0.5 font-bold text-flare-300"
+            title="La campana suena con cada liquidación que supera el millón de dólares"
+          >
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+              <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+            </svg>
+            &gt;$1M suena
+          </span>
           <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 bg-long-400" />long</span>
           <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 bg-short-400" />short</span>
         </div>
@@ -163,6 +173,7 @@ export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Pr
           {filtered.map((e, i) => {
             const isLong = e.side === "long";
             const big = e.qtyUsd > whaleThr;
+            const millonaria = e.qtyUsd >= 1e6;
             return (
               <div
                 key={e.id}
@@ -195,6 +206,18 @@ export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Pr
                     title="Estimación del modelo (Binance no publica su stream de liquidaciones)"
                   >
                     EST
+                  </span>
+                )}
+                {millonaria && (
+                  <span
+                    className={`shrink-0 text-flare-300 ${i === 0 ? "animate-pulse" : ""}`}
+                    title="Liquidación > $1M — suena la campana"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+                      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                      <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+                    </svg>
                   </span>
                 )}
                 <span className={`tick-num shrink-0 font-mono text-[11px] font-bold ${big ? "text-flare-300" : "text-mist-200"}`}>
