@@ -148,6 +148,7 @@ function Dashboard() {
               ind={ind}
               cfg={cfg}
               confluence={mergedConfluence}
+              market={engine.market}
             />
           </div>
         </div>

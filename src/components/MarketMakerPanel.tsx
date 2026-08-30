@@ -118,11 +118,25 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence, market =
             />
           </h2>
           <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-mist-500">
-            ruta de liquidez · objetivo = pool más cercano
+            ruta de liquidez · objetivo = pool más cercano · {market === "perp" ? "futuros" : "spot"}
           </p>
         </div>
         <span
-          className="ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest"
+          className={`ml-auto border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest ${
+            market === "perp"
+              ? "border-long-500/40 bg-long-900/40 text-long-300"
+              : "border-mist-500/40 bg-ink-800 text-mist-400"
+          }`}
+          title={
+            market === "perp"
+              ? "Escalera y fases calculadas sobre el PERPETUO de Binance Futuros"
+              : "Escalera y fases calculadas sobre el mercado SPOT"
+          }
+        >
+          {market}
+        </span>
+        <span
+          className="border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-widest"
           style={{ color: col, borderColor: `${col}66`, background: `${col}14` }}
         >
           {up ? "↑ barrido alto" : "↓ barrido bajo"}
