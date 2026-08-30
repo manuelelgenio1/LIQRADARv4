@@ -99,7 +99,12 @@ function Dashboard() {
 
       <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 lg:px-6 lg:py-5">
         {/* franja de confluencia multi-timeframe */}
-        <ConfluenceStrip confluence={mergedConfluence} symbol={engine.symbol} activeTf={engine.tfKey} />
+        <ConfluenceStrip
+          confluence={mergedConfluence}
+          symbol={engine.symbol}
+          activeTf={engine.tfKey}
+          updatedAt={engine.confluenceAt}
+        />
 
         {/* fila 1: heatmap (8/12) + radar (4/12) — alturas igualadas */}
         <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">

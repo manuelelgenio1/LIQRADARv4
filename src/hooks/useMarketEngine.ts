@@ -113,8 +113,9 @@ export function useMarketEngine() {
   const liqSeqRef = useRef(0);
   const ctValRef = useRef<Record<string, number>>({});
 
-  // confluencia multi-timeframe (tendencia en 5 TFs del símbolo activo)
+  // confluencia multi-timeframe (tendencia en las 7 TFs del símbolo activo)
   const [confluence, setConfluence] = useState<{ tf: string; dir: TrendDir; strength: number }[] | null>(null);
+  const [confluenceAt, setConfluenceAt] = useState(0);
 
   // sentimiento real (ratio long/short de cuentas y top traders)
   const [sentiment, setSentiment] = useState<LongShortRatio | null>(null);
@@ -346,7 +347,12 @@ export function useMarketEngine() {
     };
   }, [source, symbol, tfKey, paused]);
 
-  // ---------- CONFLUENCIA MULTI-TF: tendencia en 5 temporalidades ----------
+  // ---------- CONFLUENCIA MULTI-TF: tendencia en las 7 temporalidades ----------
+  // COHERENCIA CON EL GRÁFICO: cada chip se calcula sobre WARMUP_COUNT (500)
+  // velas, la MISMA ventana que usa useIndicators para la insignia del heatmap
+  // (que lee state.warm). Así el chip de la temporalidad activa y la insignia
+  // del gráfico jamás difieren: son el mismo cálculo sobre la misma ventana.
+  const reloadConfluenceRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (source === "connecting") return;
     let cancelled = false;
@@ -367,8 +373,7 @@ export function useMarketEngine() {
         const res = await Promise.allSettled(
           tfs.map(async (tf) => {
             const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
-            // 300 velas para sembrar bien EMA/ADX antes de leer el consenso
-            const kl = await fetchKlines(symbol, toBinanceInterval(tf), 300);
+            const kl = await fetchKlines(symbol, toBinanceInterval(tf), WARMUP_COUNT);
             const ind = computeIndicators(kl, cfgFor(tf), minutes);
             return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
           })
@@ -377,9 +382,13 @@ export function useMarketEngine() {
         const items = res
           .filter((r): r is PromiseFulfilledResult<{ tf: string; dir: TrendDir; strength: number }> => r.status === "fulfilled")
           .map((r) => r.value);
-        if (items.length) setConfluence(items);
+        if (items.length) {
+          setConfluence(items);
+          setConfluenceAt(Date.now());
+        }
       } else {
         // modo simulado: velas sintéticas deterministas por símbolo+tf
+        // (misma ventana de 128 velas que dibuja el gráfico en simulación)
         if (cancelled) return;
         const items = tfs.map((tf) => {
           const minutes = TIMEFRAMES.find((t) => t.key === tf)?.minutes ?? 5;
@@ -388,15 +397,25 @@ export function useMarketEngine() {
           return { tf, dir: ind.consensus.dir, strength: ind.consensus.strength };
         });
         setConfluence(items);
+        setConfluenceAt(Date.now());
       }
     };
+    reloadConfluenceRef.current = () => void load();
     load();
     const id = window.setInterval(load, 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      reloadConfluenceRef.current = () => {};
     };
   }, [source, symbol]);
+
+  // al mover los sliders de calibración, recalcular la confluencia sin
+  // esperar al intervalo de 60 s (con debounce para no saturar la API)
+  useEffect(() => {
+    const t = window.setTimeout(() => reloadConfluenceRef.current(), 900);
+    return () => window.clearTimeout(t);
+  }, [calibration]);
 
   // ---------- laboratorio + alertas (cada 3 s) ----------
   useEffect(() => {
@@ -565,6 +584,7 @@ export function useMarketEngine() {
     liqSource,
     realCvd,
     confluence,
+    confluenceAt,
     calibration,
     setCalibration,
     symbols: SYMBOLS,
