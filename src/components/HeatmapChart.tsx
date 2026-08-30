@@ -305,45 +305,71 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
   });
 
+  // desplazamiento horizontal (paneo): velas de desfase desde el extremo derecho
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ x: number; offset: number } | null>(null);
+
   const meta = state.meta;
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
+
+  // cuenta regresiva para el cierre de la vela actual (alineada al intervalo UTC)
+  const [nowTs, setNowTs] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const intervalMs = tfMin * 60_000;
+  const candleStart = Math.floor(nowTs / intervalMs) * intervalMs;
+  const remainMs = Math.max(0, intervalMs - (nowTs - candleStart));
+  const remainStr = (() => {
+    const s = Math.floor(remainMs / 1000);
+    if (tfMin >= 1440) return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+    if (tfMin >= 60) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  })();
+  const elapsedPct = Math.min(100, ((nowTs - candleStart) / intervalMs) * 100);
 
   // ---- mapeo precio↔píxel (lineal o logarítmico) compartido por canvas y tooltip ----
   // El eje vertical usa state.pMin/pMax — la MISMA ancla contra la que se indexa
   // el calor de liquidaciones. Usar una sola fuente de verdad evita que el eje y
   // el calor diverjan (antes, en timeframes bajos, el calor se re-mapeaba contra
   // un rango que derivaba del eje y desaparecía).
-  const view = useMemo(
-    () => ({ start: CANDLE_COUNT - visibleCount, yMin: state.pMin, yMax: state.pMax }),
-    [state.pMin, state.pMax, visibleCount]
-  );
+  // ventana visible con soporte de paneo: `offset` desplaza la ventana hacia
+  // el historial (0 = anclada a la vela actual, que es el extremo derecho).
+  const view = useMemo(() => {
+    const off = Math.max(0, Math.min(offset, CANDLE_COUNT - visibleCount));
+    const start = CANDLE_COUNT - visibleCount - off;
+    return { start, end: start + visibleCount, offset: off };
+  }, [visibleCount, offset]);
 
   // memoizadas: son dependencias del efecto de dibujo y no deben recrearse en
   // cada render (evita redibujos innecesarios y referencias inestables)
   const scaleY = useMemo(
     () => (p: number, plotTop: number, plotH: number) => {
-      if (logScale && view.yMin > 0 && p > 0) {
-        const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
+      if (logScale && state.pMin > 0 && p > 0) {
+        const lmin = Math.log(state.pMin), lmax = Math.log(state.pMax);
         return plotTop + ((lmax - Math.log(p)) / (lmax - lmin)) * plotH;
       }
-      return plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
+      return plotTop + ((state.pMax - p) / (state.pMax - state.pMin)) * plotH;
     },
-    [logScale, view]
+    [logScale, state.pMin, state.pMax]
   );
   const scalePrice = useMemo(
     () => (py: number, plotTop: number, plotH: number) => {
-      if (logScale && view.yMin > 0) {
-        const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
+      if (logScale && state.pMin > 0) {
+        const lmin = Math.log(state.pMin), lmax = Math.log(state.pMax);
         return Math.exp(lmax - ((py - plotTop) / plotH) * (lmax - lmin));
       }
-      return view.yMax - ((py - plotTop) / plotH) * (view.yMax - view.yMin);
+      return state.pMax - ((py - plotTop) / plotH) * (state.pMax - state.pMin);
     },
-    [logScale, view]
+    [logScale, state.pMin, state.pMax]
   );
 
-  // zoom por timeframe, persistido
+  // zoom por timeframe, persistido (y paneo reseteado al cambiar de temporalidad)
   useEffect(() => {
     setVisibleCount(loadZoom(tfKey));
+    setOffset(0);
   }, [tfKey]);
   useEffect(() => {
     try {
@@ -481,10 +507,10 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   };
 
   const zoomBy = (dir: number) => {
-    setVisibleCount((v) => {
-      const next = Math.round(v * (dir > 0 ? 1.25 : 0.8));
-      return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, next));
-    });
+    const next = Math.max(MIN_VIS, Math.min(CANDLE_COUNT, Math.round(visibleCount * (dir > 0 ? 1.25 : 0.8))));
+    setVisibleCount(next);
+    // el desplazamiento no puede exceder el historial disponible tras el zoom
+    setOffset((o) => Math.min(o, CANDLE_COUNT - next));
   };
 
   // wheel NATIVO no pasivo: React registra onWheel como pasivo y
@@ -501,6 +527,29 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
   }, []);
+
+  // paneo: mientras arrastras, desplazar la ventana por el historial.
+  // Los listeners van en window para que el arrastre siga fuera del canvas.
+  useEffect(() => {
+    if (!dragging) return;
+    const onMoveW = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const cw = (width - SCALE_W) / visibleCount;
+      const next = Math.round(d.offset + (e.clientX - d.x) / cw);
+      setOffset(Math.max(0, Math.min(CANDLE_COUNT - visibleCount, next)));
+    };
+    const onUpW = () => {
+      dragRef.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("mousemove", onMoveW);
+    window.addEventListener("mouseup", onUpW);
+    return () => {
+      window.removeEventListener("mousemove", onMoveW);
+      window.removeEventListener("mouseup", onUpW);
+    };
+  }, [dragging, width, visibleCount]);
 
   // ================= dibujo =================
   useEffect(() => {
@@ -546,7 +595,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
     // ---- render térmico suavizado (offscreen + interpolación + bloom) ----
     let heatVisMax = 0;
-    for (let i = view.start; i < CANDLE_COUNT; i++)
+    for (let i = view.start; i < view.end; i++)
       for (let b = 0; b < HEAT_BINS; b++) heatVisMax = Math.max(heatVisMax, heat[i * HEAT_BINS + b]);
     if (heatVisMax <= 0) heatVisMax = state.heatMax || 1;
 
@@ -689,7 +738,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     if (layers.vwap) {
       ctx.beginPath();
       let started = false;
-      for (let i = view.start; i < CANDLE_COUNT; i++) {
+      for (let i = view.start; i < view.end; i++) {
         const v = vwap[i];
         if (!Number.isFinite(v)) continue;
         const pxx = (i - view.start) * cellW + cellW / 2;
@@ -866,7 +915,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
 
     // ---- velas ----
-    for (let i = view.start; i < CANDLE_COUNT; i++) {
+    for (let i = view.start; i < view.end; i++) {
       const k = candles[i];
       const cx = (i - view.start) * cellW + cellW / 2;
       const up = k.c >= k.o;
@@ -886,7 +935,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     // ---- Supertrend + marcadores de giro CONFIRMADO ----
     if (layers.st) {
       ctx.lineWidth = 1.6;
-      for (let i = view.start + 1; i < CANDLE_COUNT; i++) {
+      for (let i = view.start + 1; i < view.end; i++) {
         const px0 = (i - 1 - view.start) * cellW + cellW / 2;
         const px1 = (i - view.start) * cellW + cellW / 2;
         ctx.strokeStyle = ind.stUp[i] ? "rgba(45,224,192,0.85)" : "rgba(255,93,126,0.85)";
@@ -896,7 +945,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         ctx.stroke();
       }
       ctx.lineWidth = 1;
-      for (let i = Math.max(1, view.start); i < CANDLE_COUNT; i++) {
+      for (let i = Math.max(1, view.start); i < view.end; i++) {
         if (ind.stUpConf[i] !== ind.stUpConf[i - 1]) {
           const cx = (i - view.start) * cellW + cellW / 2;
           const cy = y(ind.st[i]);
@@ -919,7 +968,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       const drawEma = (arr: number[], col: string, w: number, dash?: number[]) => {
         ctx.beginPath();
         ctx.setLineDash(dash ?? []);
-        for (let i = view.start; i < CANDLE_COUNT; i++) {
+        for (let i = view.start; i < view.end; i++) {
           const pxx = (i - view.start) * cellW + cellW / 2;
           const pyy = y(arr[i]);
           if (i === view.start) ctx.moveTo(pxx, pyy);
@@ -938,14 +987,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     // ---- CVD superpuesto al precio (divergencias) ----
     if (layers.cvdOv) {
       let cMin = Infinity, cMax = -Infinity;
-      for (let i = view.start; i < CANDLE_COUNT; i++) {
+      for (let i = view.start; i < view.end; i++) {
         cMin = Math.min(cMin, cvd[i]);
         cMax = Math.max(cMax, cvd[i]);
       }
       const cSpan = cMax - cMin || 1;
       const cyv = (v: number) => plotTop + ((cMax - v) / cSpan) * plotH;
       ctx.beginPath();
-      for (let i = view.start; i < CANDLE_COUNT; i++) {
+      for (let i = view.start; i < view.end; i++) {
         const pxx = (i - view.start) * cellW + cellW / 2;
         if (i === view.start) ctx.moveTo(pxx, cyv(cvd[i]));
         else ctx.lineTo(pxx, cyv(cvd[i]));
@@ -974,11 +1023,27 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     ctx.fillText(fmtPrice(lastC, meta.decimals), plotW + 8, ly + 0.5);
     ctx.font = "10px 'IBM Plex Mono', monospace";
 
+    // ---- cuenta regresiva de la vela / indicador de historial ----
+    // En la vela actual muestra el tiempo para el cierre; si estás desplazado
+    // al historial, muestra cuántas velas atrás estás.
+    ctx.textAlign = "left";
+    if (view.offset > 0) {
+      ctx.fillStyle = "rgba(255,178,36,0.95)";
+      ctx.font = "600 9px 'IBM Plex Mono', monospace";
+      ctx.fillText(`◄ +${view.offset} velas`, plotW + 8, plotTop + 24);
+      ctx.font = "10px 'IBM Plex Mono', monospace";
+    } else {
+      ctx.fillStyle = "rgba(45,224,192,0.95)";
+      ctx.font = "600 9px 'IBM Plex Mono', monospace";
+      ctx.fillText(remainStr, plotW + 8, plotTop + 24);
+      ctx.font = "10px 'IBM Plex Mono', monospace";
+    }
+
     // ---- eje temporal ----
     ctx.fillStyle = "#48597a";
     ctx.textAlign = "center";
     const step = Math.max(1, Math.round(visibleCount / 5));
-    for (let i = view.start; i < CANDLE_COUNT; i += step) {
+    for (let i = view.start; i < view.end; i += step) {
       ctx.fillText(
         fmtAxisTime(candles[i].t, tfMin),
         (i - view.start) * cellW + cellW / 2,
@@ -992,8 +1057,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     ctx.moveTo(0, subTop - 6);
     ctx.lineTo(width, subTop - 6);
     ctx.stroke();
-    const slice = (arr: number[]) => arr.slice(view.start);
-    const sliceB = (arr: boolean[]) => arr.slice(view.start);
+    const slice = (arr: number[]) => arr.slice(view.start, view.end);
     const pxOf = (i: number) => i * cellW + cellW / 2;
 
     if (osc === "cvd") {
@@ -1199,21 +1263,23 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
       }
     }
-  }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta]);
+  }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, remainStr]);
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // mientras arrastras para desplazar, no actualizar el crosshair
+    if (dragRef.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const yy = e.clientY - rect.top;
     const plotW = width - SCALE_W;
     const plotBottom = chartH - TIME_H - SUB_H - 12;
     const vIdx = Math.min(visibleCount - 1, Math.max(0, Math.floor((x / plotW) * visibleCount)));
-    const idx = view.start + vIdx;
+    const idx = Math.min(view.end - 1, view.start + vIdx);
     const price = scalePrice(yy, PAD_T, plotBottom - PAD_T);
     const bin = Math.min(HEAT_BINS - 1, Math.max(0, Math.round(((price - state.pMin) / (state.pMax - state.pMin)) * (HEAT_BINS - 1))));
     // mismo máximo de ventana que usa el canvas
     let heatVisMax = 0;
-    for (let i = view.start; i < CANDLE_COUNT; i++)
+    for (let i = view.start; i < view.end; i++)
       for (let b = 0; b < HEAT_BINS; b++) heatVisMax = Math.max(heatVisMax, state.heat[i * HEAT_BINS + b]);
     if (heatVisMax <= 0) heatVisMax = state.heatMax || 1;
     const heat = state.heat[idx * HEAT_BINS + bin] / heatVisMax;
@@ -1356,6 +1422,20 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
         <ToolDivider />
 
+        <ToolGroup label="Próxima vela" title="Tiempo restante para el cierre de la vela actual">
+          <div className="flex items-center gap-2 px-2.5 py-1">
+            <span className="tick-num font-mono text-[11px] font-bold text-long-300">{remainStr}</span>
+            <span className="h-1 w-10 overflow-hidden bg-ink-700" title="Progreso de la vela actual">
+              <span
+                className="block h-full bg-long-400/70 transition-[width] duration-1000 ease-linear"
+                style={{ width: `${elapsedPct}%` }}
+              />
+            </span>
+          </div>
+        </ToolGroup>
+
+        <ToolDivider />
+
         <ToolGroup label="Zoom" title="Nivel de zoom sobre la ventana de velas (rueda del ratón)">
           <button
             onClick={() => zoomBy(1)}
@@ -1441,6 +1521,8 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 border border-ink-700 bg-ink-900/90 px-3 py-1.5 font-mono text-[9px] uppercase tracking-widest text-mist-500 backdrop-blur-sm">
             <span><b className="text-mist-300">rueda</b> zoom</span>
             <span className="text-ink-600">·</span>
+            <span><b className="text-mist-300">arrastrar</b> mover</span>
+            <span className="text-ink-600">·</span>
             <span><b className="text-mist-300">← →</b> timeframe</span>
             <span className="text-ink-600">·</span>
             <span><b className="text-mist-300">L</b> escala log</span>
@@ -1479,11 +1561,36 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: chartH, display: "block", cursor: "crosshair" }}
+          style={{ width: "100%", height: chartH, display: "block", cursor: dragging ? "grabbing" : "crosshair" }}
           onMouseMove={onMove}
-          onMouseLeave={() => setHover(null)}
-          onDoubleClick={() => setVisibleCount(CANDLE_COUNT)}
+          onMouseLeave={() => {
+            if (!dragRef.current) setHover(null);
+          }}
+          onMouseDown={(e) => {
+            dragRef.current = { x: e.clientX, offset: view.offset };
+            setDragging(true);
+            setHover(null);
+          }}
+          onDoubleClick={() => {
+            setVisibleCount(CANDLE_COUNT);
+            setOffset(0);
+          }}
         />
+
+        {/* volver al presente cuando estás desplazado al historial */}
+        {view.offset > 0 && (
+          <button
+            onClick={() => setOffset(0)}
+            className="anim-feed-in absolute bottom-8 right-3 z-20 flex items-center gap-1.5 border border-flare-400/50 bg-ink-900/90 px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-flare-300 shadow-lg backdrop-blur-sm transition-all hover:bg-flare-400/20"
+            title="Volver a la vela actual"
+          >
+            al presente
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6">
+              <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+
         {hover && k && (
           <div
             className="pointer-events-none absolute z-20 border border-ink-600 bg-ink-900/95 px-3 py-2 font-mono text-[10px] shadow-xl"
@@ -1566,7 +1673,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           <span className={`border px-1.5 py-0.5 ${zoomed ? "border-flare-400/40 text-flare-300" : "border-ink-700 bg-ink-850 text-mist-400"}`}>
             ×{(CANDLE_COUNT / visibleCount).toFixed(1)}
           </span>
-          <span className="text-mist-600">rueda = zoom · doble clic = reset</span>
+          {view.offset > 0 && (
+            <span className="border border-flare-400/40 bg-flare-400/10 px-1.5 py-0.5 text-flare-300">
+              hist +{view.offset}
+            </span>
+          )}
+          <span className="text-mist-600">rueda = zoom · arrastrar = mover · doble clic = reset</span>
         </span>
       </footer>
     </section>
