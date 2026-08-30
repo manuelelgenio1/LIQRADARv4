@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TrendDir } from "../lib/indicators";
 import { pctOf } from "../lib/format";
 
@@ -33,6 +33,24 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
     dirs.length >= 4 && dirs.every((d) => d === dirs[0]) ? dirs[0] : null;
 
   const ago = updatedAt > 0 ? Math.max(0, Math.round((now - updatedAt) / 1000)) : null;
+
+  // detectar cambios de dirección reales para señalarlos con un pulso preciso
+  // (el color cambia al instante; el pulso anuncia QUE cambió, sin fundirlo)
+  const prevDirs = useRef<Record<string, TrendDir>>({});
+  const [pulsing, setPulsing] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const changed = new Set<string>();
+    for (const c of confluence ?? []) {
+      const prev = prevDirs.current[c.tf];
+      if (prev !== undefined && prev !== c.dir) changed.add(c.tf);
+      prevDirs.current[c.tf] = c.dir;
+    }
+    if (changed.size) {
+      setPulsing(changed);
+      const t = window.setTimeout(() => setPulsing(new Set()), 750);
+      return () => window.clearTimeout(t);
+    }
+  }, [confluence]);
 
   return (
     <section className="panel anim-reveal" style={{ animationDelay: "0.02s" }}>
@@ -78,25 +96,36 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
             {confluence.map((c) => {
               const m = DIR_META[c.dir];
               const isActive = c.tf === activeTf;
+              const isPulsing = pulsing.has(c.tf);
               return (
                 <div
                   key={c.tf}
-                  className={`flex items-center gap-2 border px-2.5 py-1.5 transition-colors duration-500 ${
+                  className={`flex items-center gap-2 border px-2.5 py-1.5 transition-[border-color,background-color] duration-300 ${
                     isActive
                       ? "border-flare-400/50 bg-flare-400/10 shadow-[0_0_12px_rgba(255,178,36,0.15)]"
                       : "border-ink-700 bg-ink-850/80"
-                  }`}
+                  } ${isPulsing ? "anim-chip-flash" : ""}`}
                   title={`${c.tf}${isActive ? " (temporalidad activa del gráfico)" : ""}: ${m.label} · convicción ${pctOf(c.strength)}`}
                 >
-                  <span className={`font-mono text-[10px] font-bold transition-colors duration-500 ${isActive ? "text-flare-300" : "text-mist-300"}`}>
+                  <span className={`font-mono text-[10px] font-bold ${isActive ? "text-flare-300" : "text-mist-300"}`}>
                     {c.tf}
                     {isActive && <span className="ml-1 text-[7px]">●</span>}
                   </span>
-                  <span className={`h-2 w-2 rounded-full transition-colors duration-500 ${m.dot}`} />
-                  <span className={`font-mono text-[8.5px] font-bold uppercase tracking-wider transition-colors duration-500 ${m.text}`}>{m.label}</span>
+                  {/* flecha direccional: el color cambia al instante, sin fundido */}
+                  <span className={`leading-none ${m.text}`}>
+                    {c.dir === "alcista" ? (
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4 L21 18 H3 Z" /></svg>
+                    ) : c.dir === "bajista" ? (
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20 L3 6 H21 Z" /></svg>
+                    ) : (
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M4 12 H20" strokeLinecap="round" /></svg>
+                    )}
+                  </span>
+                  <span className={`h-2 w-2 rounded-full ${m.dot}`} />
+                  <span className={`font-mono text-[8.5px] font-bold uppercase tracking-wider ${m.text}`}>{m.label}</span>
                   <span className="h-1 w-8 overflow-hidden bg-ink-700">
                     <span
-                      className="block h-full transition-all duration-700"
+                      className="block h-full transition-[width] duration-500"
                       style={{ width: pctOf(c.strength), background: m.bar }}
                     />
                   </span>
@@ -133,12 +162,12 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
             </div>
 
             {/* frescura + ventana */}
-            <div className="hidden flex-col items-end leading-tight lg:flex" title="Cada chip se calcula sobre 500 velas reales, igual que la insignia del gráfico. Se actualiza cada 60 s.">
+            <div className="hidden flex-col items-end leading-tight lg:flex" title="Cada chip se calcula sobre 500 velas reales, igual que la insignia del gráfico. En vivo se actualiza cada 30 s.">
               <span className="tick-num font-mono text-[9px] text-mist-500">
                 {ago != null ? `hace ${ago}s` : "—"}
               </span>
               <span className="font-mono text-[7.5px] uppercase tracking-widest text-mist-600">
-                500 velas · 60 s
+                500 velas · 30 s
               </span>
             </div>
           </div>

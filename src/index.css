@@ -109,6 +109,14 @@ body {
   60% { transform: rotate(7deg); }
   80% { transform: rotate(-4deg); }
 }
+/* pulso anular que señala un cambio de dirección (sin fundir colores) */
+@keyframes chipFlash {
+  0% { box-shadow: 0 0 0 0 rgba(219, 230, 247, 0.65); }
+  100% { box-shadow: 0 0 0 9px rgba(219, 230, 247, 0); }
+}
+.anim-chip-flash {
+  animation: chipFlash 0.7s ease-out;
+}
 
 .anim-reveal {
   animation: panelReveal 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
