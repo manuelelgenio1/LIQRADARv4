@@ -373,18 +373,33 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
   }, [logScale]);
 
-  // ResizeObserver para pantalla completa / responsive
+  // Medición robusta del área del gráfico (normal y pantalla completa):
+  // ResizeObserver + doble rAF tras cambiar de modo + listener de ventana.
+  // El canvas usa SIEMPRE la altura medida en píxeles (chartH), nunca "%".
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      setWidth(el.clientWidth);
-      setChartH(el.clientHeight || H);
-    });
+    const measure = () => {
+      const w = el.clientWidth;
+      const h = fullscreen ? Math.max(220, el.clientHeight) : H;
+      setWidth((prev) => (prev === w ? prev : w));
+      setChartH((prev) => (prev === h ? prev : h));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setWidth(el.clientWidth);
-    setChartH(el.clientHeight || H);
-    return () => ro.disconnect();
+    const onResize = () => measure();
+    window.addEventListener("resize", onResize);
+    // tras el cambio de modo el layout se asienta un frame después: re-medir
+    const raf1 = requestAnimationFrame(() => {
+      measure();
+      requestAnimationFrame(measure);
+    });
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf1);
+    };
   }, [fullscreen]);
 
   // ESC cierra la pantalla completa + bloquea el scroll del fondo + atajos
@@ -455,6 +470,21 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, next));
     });
   };
+
+  // wheel NATIVO no pasivo: React registra onWheel como pasivo y
+  // preventDefault lanzaba error en consola; así el zoom no desplaza la página
+  const zoomByRef = useRef(zoomBy);
+  zoomByRef.current = zoomBy;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      zoomByRef.current(e.deltaY > 0 ? 1 : -1);
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, []);
 
   // ================= dibujo =================
   useEffect(() => {
@@ -1370,14 +1400,10 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: fullscreen ? "100%" : H, display: "block", cursor: "crosshair" }}
+          style={{ width: "100%", height: chartH, display: "block", cursor: "crosshair" }}
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
           onDoubleClick={() => setVisibleCount(CANDLE_COUNT)}
-          onWheel={(e) => {
-            e.preventDefault();
-            zoomBy(e.deltaY > 0 ? 1 : -1);
-          }}
         />
         {hover && k && (
           <div
