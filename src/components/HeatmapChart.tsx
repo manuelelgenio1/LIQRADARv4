@@ -320,20 +320,28 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     return { start, yMin: yMin - pad, yMax: yMax + pad };
   }, [state.candles, visibleCount]);
 
-  const scaleY = (p: number, plotTop: number, plotH: number) => {
-    if (logScale && view.yMin > 0 && p > 0) {
-      const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
-      return plotTop + ((lmax - Math.log(p)) / (lmax - lmin)) * plotH;
-    }
-    return plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
-  };
-  const scalePrice = (py: number, plotTop: number, plotH: number) => {
-    if (logScale && view.yMin > 0) {
-      const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
-      return Math.exp(lmax - ((py - plotTop) / plotH) * (lmax - lmin));
-    }
-    return view.yMax - ((py - plotTop) / plotH) * (view.yMax - view.yMin);
-  };
+  // memoizadas: son dependencias del efecto de dibujo y no deben recrearse en
+  // cada render (evita redibujos innecesarios y referencias inestables)
+  const scaleY = useMemo(
+    () => (p: number, plotTop: number, plotH: number) => {
+      if (logScale && view.yMin > 0 && p > 0) {
+        const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
+        return plotTop + ((lmax - Math.log(p)) / (lmax - lmin)) * plotH;
+      }
+      return plotTop + ((view.yMax - p) / (view.yMax - view.yMin)) * plotH;
+    },
+    [logScale, view]
+  );
+  const scalePrice = useMemo(
+    () => (py: number, plotTop: number, plotH: number) => {
+      if (logScale && view.yMin > 0) {
+        const lmin = Math.log(view.yMin), lmax = Math.log(view.yMax);
+        return Math.exp(lmax - ((py - plotTop) / plotH) * (lmax - lmin));
+      }
+      return view.yMax - ((py - plotTop) / plotH) * (view.yMax - view.yMin);
+    },
+    [logScale, view]
+  );
 
   // zoom por timeframe, persistido
   useEffect(() => {
@@ -374,30 +382,40 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   }, [logScale]);
 
   // Medición robusta del área del gráfico (normal y pantalla completa):
-  // ResizeObserver + doble rAF tras cambiar de modo + listener de ventana.
-  // El canvas usa SIEMPRE la altura medida en píxeles (chartH), nunca "%".
+  // ResizeObserver + reintentos tras cambiar de modo + listener de ventana +
+  // respaldo basado en la ventana. El canvas usa SIEMPRE píxeles (chartH).
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const measure = () => {
-      const w = el.clientWidth;
-      const h = fullscreen ? Math.max(220, el.clientHeight) : H;
+      const w = el.clientWidth || el.getBoundingClientRect().width;
+      let h: number;
+      if (fullscreen) {
+        h = el.clientHeight || el.getBoundingClientRect().height;
+        // Respaldo: si el flex aún no dio altura útil, deducir de la ventana
+        // (cabecera + barra de herramientas + barra de estado ≈ 190 px).
+        if (h < 320) h = Math.max(320, window.innerHeight - 190);
+      } else {
+        h = H;
+      }
       setWidth((prev) => (prev === w ? prev : w));
       setChartH((prev) => (prev === h ? prev : h));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    const onResize = () => measure();
-    window.addEventListener("resize", onResize);
-    // tras el cambio de modo el layout se asienta un frame después: re-medir
-    const raf1 = requestAnimationFrame(() => {
-      measure();
-      requestAnimationFrame(measure);
-    });
+    window.addEventListener("resize", measure);
+    // tras el cambio de modo el layout se asienta unos frames después: re-medir
+    const t1 = window.setTimeout(measure, 60);
+    const t2 = window.setTimeout(measure, 320);
+    const raf1 = requestAnimationFrame(() =>
+      requestAnimationFrame(() => requestAnimationFrame(measure))
+    );
     return () => {
       ro.disconnect();
-      window.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", measure);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
       cancelAnimationFrame(raf1);
     };
   }, [fullscreen]);
@@ -556,8 +574,10 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         const i = view.start + c;
         const idx4 = (r * visibleCount + c) * 4;
         const v = heat[i * HEAT_BINS + b0] * (1 - frac) + heat[i * HEAT_BINS + b1] * frac;
-        const t = Math.min(1, Math.pow(v / heatVisMax, 1.25));
-        if (t < 0.045) {
+        // curva suave (exponente bajo) para que las zonas de intensidad media
+        // sean visibles también en temporalidades bajas con calor más disperso
+        const t = Math.min(1, Math.pow(v / heatVisMax, 1.05));
+        if (t < 0.02) {
           px[idx4 + 3] = 0;
           continue;
         }
@@ -1179,10 +1199,17 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
   return (
     <section
-      className={`panel panel-corner anim-reveal ${
-        fullscreen ? "fixed inset-0 z-50 flex flex-col overflow-hidden rounded-none border-0" : ""
+      className={`panel panel-corner ${fullscreen ? "" : "anim-reveal"} ${
+        fullscreen ? "z-50 flex flex-col overflow-hidden rounded-none border-0" : ""
       }`}
-      style={{ animationDelay: "0.05s" }}
+      // position/inset van en style inline: ".panel { position: relative }" es CSS
+      // sin capa y en la cascada vence a la utilidad ".fixed" de Tailwind, por lo
+      // que solo un inline style garantiza que el panel pase a pantalla completa.
+      style={
+        fullscreen
+          ? { position: "fixed", inset: 0, width: "100vw", height: "100vh" }
+          : { animationDelay: "0.05s" }
+      }
     >
       {/* cabecera: identidad + tendencia + régimen + acciones */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/50 px-4 py-2.5">
