@@ -4,6 +4,7 @@ import { pctOf } from "../lib/format";
 interface Props {
   confluence: { tf: string; dir: TrendDir; strength: number }[] | null;
   symbol: string;
+  activeTf?: string;
 }
 
 const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar: string }> = {
@@ -12,7 +13,7 @@ const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar
   lateral: { label: "LATERAL", dot: "bg-mist-500", text: "text-mist-400", bar: "#5f7396" },
 };
 
-export default function ConfluenceStrip({ confluence, symbol }: Props) {
+export default function ConfluenceStrip({ confluence, symbol, activeTf }: Props) {
   const aligned =
     confluence && confluence.length >= 4
       ? confluence.filter((c) => c.dir !== "lateral").every((c) => c.dir === confluence.filter((x) => x.dir !== "lateral")[0]?.dir)
@@ -44,13 +45,21 @@ export default function ConfluenceStrip({ confluence, symbol }: Props) {
           <div className="flex flex-1 flex-wrap items-center gap-2">
             {confluence.map((c) => {
               const m = DIR_META[c.dir];
+              const isActive = c.tf === activeTf;
               return (
                 <div
                   key={c.tf}
-                  className="flex items-center gap-2 border border-ink-700 bg-ink-850/80 px-2.5 py-1.5"
-                  title={`${c.tf}: ${m.label} · convicción ${pctOf(c.strength)}`}
+                  className={`flex items-center gap-2 border px-2.5 py-1.5 transition-all ${
+                    isActive
+                      ? "border-flare-400/50 bg-flare-400/10 shadow-[0_0_12px_rgba(255,178,36,0.15)]"
+                      : "border-ink-700 bg-ink-850/80"
+                  }`}
+                  title={`${c.tf}${isActive ? " (temporalidad activa)" : ""}: ${m.label} · convicción ${pctOf(c.strength)}`}
                 >
-                  <span className="font-mono text-[10px] font-bold text-mist-300">{c.tf}</span>
+                  <span className={`font-mono text-[10px] font-bold ${isActive ? "text-flare-300" : "text-mist-300"}`}>
+                    {c.tf}
+                    {isActive && <span className="ml-1 text-[7px]">●</span>}
+                  </span>
                   <span className={`h-2 w-2 rounded-full ${m.dot}`} />
                   <span className={`font-mono text-[8.5px] font-bold uppercase tracking-wider ${m.text}`}>{m.label}</span>
                   <span className="h-1 w-8 overflow-hidden bg-ink-700">

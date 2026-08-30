@@ -39,7 +39,7 @@ const PAD_T = 16;
 const MIN_VIS = 24;
 
 const ZOOM_KEY = "liqradar:zoom:v1";
-const LEV_KEY = "liqradar:lev:v1";
+const LEV_KEY = "liqradar:lev:v2";
 const LOG_KEY = "liqradar:log:v1";
 
 function loadZoom(tf: string): number {
@@ -122,7 +122,7 @@ const LEVS = [5, 10, 20, 50, 100];
 const LEV_ALPHA: Record<number, number> = { 5: 0.34, 10: 0.38, 20: 0.44, 50: 0.55, 100: 0.68 };
 
 function loadLevOn(): Record<number, boolean> {
-  const d: Record<number, boolean> = { 5: false, 10: false, 20: true, 50: true, 100: true };
+  const d: Record<number, boolean> = { 5: false, 10: true, 20: true, 50: true, 100: true };
   try {
     const raw = localStorage.getItem(LEV_KEY);
     if (raw) {
@@ -761,45 +761,78 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         items.push({ price: lastC * (1 + 1 / lev), col: "255,93,126", tag: `x${lev} ${pctDist < 10 ? pctDist.toFixed(1) : pctDist.toFixed(0)}% S` });
       }
       items.sort((a, b) => b.price - a.price);
+
+      // Los niveles de liquidación están a distancias fijas del precio (x100=±1%,
+      // x10=±10%, x5=±20%). En temporalidades intradiarias la ventana visible es
+      // muy estrecha, así que varios niveles quedan FUERA del canvas. En vez de
+      // descartarlos en silencio, se anclan al borde superior/inferior para que
+      // el usuario siempre sepa dónde están (como hace TradingView/Bookmap).
+      let topN = 0;
+      let bottomN = 0;
       for (const it of items) {
         const ly = y(it.price);
-        if (ly < plotTop + 3 || ly > plotBottom - 3) continue;
         const alpha = LEV_ALPHA[Number(it.tag.match(/x(\d+)/)?.[1] ?? 20)] ?? 0.4;
-        // línea en su precio exacto
-        ctx.strokeStyle = `rgba(${it.col},${alpha})`;
-        ctx.lineWidth = 1.1;
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, ly);
-        ctx.lineTo(plotW, ly);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.lineWidth = 1;
-        // etiqueta en columna fija, desplazada si hay solape
-        let ey = ly;
-        for (const p of placed) {
-          if (Math.abs(ey - p.y) < 15) ey = p.y + 15;
-        }
-        if (ey > plotBottom - 8) ey = plotBottom - 8;
-        placed.push({ y: ey });
-        ctx.font = "600 9px 'IBM Plex Mono', monospace";
-        const tw = ctx.measureText(it.tag).width;
-        // conector si la etiqueta se desplazó
-        if (Math.abs(ey - ly) > 2) {
-          ctx.strokeStyle = `rgba(${it.col},0.35)`;
+        const aboveView = ly < plotTop + 3; // nivel por encima de la ventana
+        const belowView = ly > plotBottom - 3; // nivel por debajo de la ventana
+
+        if (!aboveView && !belowView) {
+          // ---- DENTRO de la ventana: línea + etiqueta (comportamiento original) ----
+          ctx.strokeStyle = `rgba(${it.col},${alpha})`;
+          ctx.lineWidth = 1.1;
+          ctx.setLineDash([2, 4]);
           ctx.beginPath();
-          ctx.moveTo(rightX + tw + 14, ey);
-          ctx.lineTo(plotW - 4, ly);
+          ctx.moveTo(0, ly);
+          ctx.lineTo(plotW, ly);
           ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineWidth = 1;
+          let ey = ly;
+          for (const p of placed) {
+            if (Math.abs(ey - p.y) < 15) ey = p.y + 15;
+          }
+          if (ey > plotBottom - 8) ey = plotBottom - 8;
+          placed.push({ y: ey });
+          ctx.font = "600 9px 'IBM Plex Mono', monospace";
+          const tw = ctx.measureText(it.tag).width;
+          if (Math.abs(ey - ly) > 2) {
+            ctx.strokeStyle = `rgba(${it.col},0.35)`;
+            ctx.beginPath();
+            ctx.moveTo(rightX + tw + 14, ey);
+            ctx.lineTo(plotW - 4, ly);
+            ctx.stroke();
+          }
+          ctx.fillStyle = "rgba(7,12,22,0.92)";
+          ctx.fillRect(rightX, ey - 8, tw + 14, 15);
+          ctx.strokeStyle = `rgba(${it.col},${Math.min(1, alpha + 0.2)})`;
+          ctx.strokeRect(rightX + 0.5, ey - 7.5, tw + 13, 14);
+          ctx.fillStyle = `rgba(${it.col},${Math.min(1, alpha + 0.25)})`;
+          ctx.textAlign = "left";
+          ctx.fillText(it.tag, rightX + 7, ey + 0.5);
+          ctx.font = "10px 'IBM Plex Mono', monospace";
+        } else {
+          // ---- FUERA de la ventana: marcador anclado al borde ----
+          // shorts (arriba del precio) se apilan desde el borde superior;
+          // longs (abajo del precio) desde el borde inferior.
+          const isTop = aboveView;
+          let ey = isTop ? plotTop + 8 + topN * 17 : plotBottom - 8 - bottomN * 17;
+          if (isTop) topN++;
+          else bottomN++;
+          // no dejar que la pila se salga del área de dibujo
+          ey = Math.max(plotTop + 8, Math.min(plotBottom - 8, ey));
+          const label = `${isTop ? "▲" : "▼"} ${it.tag}`;
+          ctx.font = "600 9px 'IBM Plex Mono', monospace";
+          const tw = ctx.measureText(label).width;
+          ctx.fillStyle = "rgba(7,12,22,0.88)";
+          ctx.fillRect(rightX, ey - 8, tw + 14, 15);
+          ctx.strokeStyle = `rgba(${it.col},${Math.min(1, alpha + 0.15)})`;
+          ctx.setLineDash([3, 3]);
+          ctx.strokeRect(rightX + 0.5, ey - 7.5, tw + 13, 14);
+          ctx.setLineDash([]);
+          ctx.fillStyle = `rgba(${it.col},${Math.min(1, alpha + 0.2)})`;
+          ctx.textAlign = "left";
+          ctx.fillText(label, rightX + 7, ey + 0.5);
+          ctx.font = "10px 'IBM Plex Mono', monospace";
         }
-        ctx.fillStyle = "rgba(7,12,22,0.92)";
-        ctx.fillRect(rightX, ey - 8, tw + 14, 15);
-        ctx.strokeStyle = `rgba(${it.col},${Math.min(1, alpha + 0.2)})`;
-        ctx.strokeRect(rightX + 0.5, ey - 7.5, tw + 13, 14);
-        ctx.fillStyle = `rgba(${it.col},${Math.min(1, alpha + 0.25)})`;
-        ctx.textAlign = "left";
-        ctx.fillText(it.tag, rightX + 7, ey + 0.5);
-        ctx.font = "10px 'IBM Plex Mono', monospace";
       }
     }
 
