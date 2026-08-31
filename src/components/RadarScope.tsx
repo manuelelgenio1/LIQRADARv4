@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { LiqCluster, MarketState } from "../lib/market";
 import { hashStr, RADAR_CLUSTER_LIMIT } from "../lib/market";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
@@ -20,6 +20,27 @@ const radiusFor = (frac: number) => 24 + Math.min(0.55, frac) * 245;
 
 export default function RadarScope({ state }: Props) {
   const [hovered, setHovered] = useState<{ cl: LiqCluster; x: number; y: number } | null>(null);
+  const [sweep, setSweep] = useState(0);
+
+  // Barrido guiado por rAF: el MISMO ángulo rota el haz e ilumina los blips,
+  // así que el encendido de cada clúster queda sincronizado con el haz (como
+  // un radar real, no un pulso decorativo desincronizado).
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const PERIOD = 4800; // ms por vuelta (coincide con la duración anterior)
+    const loop = (t: number) => {
+      if (t - last >= 33) { // ~30 fps, suficiente para un barrido suave
+        last = t;
+        setSweep(((t % PERIOD) / PERIOD) * 360);
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  // el haz apunta a las 12 en reposo (−90°) y gira en sentido horario
+  const beamAngle = (-90 + sweep + 360) % 360;
 
   const cur = state.candles[state.candles.length - 1].c;
   // protegido contra rango plano (evita posiciones NaN en los blips)
