@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LiqCluster, MarketState } from "../lib/market";
-import { hashStr, levFromFrac } from "../lib/market";
+import { hashStr } from "../lib/market";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
 interface Props { state: MarketState; }
@@ -22,7 +22,8 @@ export default function RadarScope({ state }: Props) {
   const [hovered, setHovered] = useState<{ cl: LiqCluster; x: number; y: number } | null>(null);
 
   const cur = state.candles[state.candles.length - 1].c;
-  const span = state.pMax - state.pMin;
+  // protegido contra rango plano (evita posiciones NaN en los blips)
+  const span = state.pMax - state.pMin || 1;
 
   const blips = state.clusters.slice(0, 12).map((cl, i) => {
     const frac = Math.abs(cl.price - cur) / span;
