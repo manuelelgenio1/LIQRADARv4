@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import type { MarketState } from "../lib/market";
 import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
 import { adxThrOf, mtfAdjust, type IndicatorBundle, type IndicatorCfg, type TrendDir } from "../lib/indicators";
@@ -216,8 +217,17 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
   const dragging = useRef<{ startX: number; startOff: number } | null>(null);
   const [grabbing, setGrabbing] = useState(false);
+  const [drawError, setDrawError] = useState<string | null>(null);
+  // expande el rango vertical para mostrar clusters + escalera de apalancamiento
+  const [liqView, setLiqView] = useState<boolean>(() => {
+    try { return localStorage.getItem("liqradar:liqview:v1") === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem("liqradar:liqview:v1", liqView ? "1" : "0"); } catch {} }, [liqView]);
 
-  // ventana visible: [start, end) con offset desde la derecha
+  // ventana visible: [start, end) con offset desde la derecha.
+  // Cuando liqView está ON, el rango vertical se expande para incluir los
+  // clusters de liquidación y la escalera de apalancamiento activa, de modo
+  // que las órdenes por debajo/encima del precio sean visibles.
   const view = useMemo(() => {
     const end = CANDLE_COUNT - offset;
     const start = Math.max(0, end - visibleCount);
@@ -227,9 +237,31 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       yMin = Math.min(yMin, k.l);
       yMax = Math.max(yMax, k.h);
     }
+    if (liqView) {
+      const last = state.candles[CANDLE_COUNT - 1]?.c ?? yMax;
+      // límite razonable: no expandir más de ±25% del precio
+      const cap = last * 0.25;
+      let lo = yMin, hi = yMax;
+      for (const cl of state.clusters) {
+        if (Math.abs(cl.price - last) <= cap) {
+          lo = Math.min(lo, cl.price);
+          hi = Math.max(hi, cl.price);
+        }
+      }
+      for (const lv of LEVS) {
+        if (!levOn[lv]) continue;
+        const off = last / lv;
+        if (off <= cap) {
+          lo = Math.min(lo, last - off);
+          hi = Math.max(hi, last + off);
+        }
+      }
+      yMin = lo;
+      yMax = hi;
+    }
     const pad = (yMax - yMin) * 0.06 || 1;
     return { start, end, yMin: yMin - pad, yMax: yMax + pad };
-  }, [state.candles, visibleCount, offset]);
+  }, [state.candles, state.clusters, visibleCount, offset, liqView, levOn]);
 
   // escalas de precio (lineal o log)
   const scaleY = useCallback((p: number, plotTop: number, plotH: number) => {
@@ -347,6 +379,8 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    setDrawError(null);
+    try {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     canvas.width = width * dpr;
     canvas.height = chartH * dpr;
@@ -866,6 +900,11 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       }
     }
 
+    } catch (err) {
+      // hace visible cualquier fallo de dibujo en lugar de dejar el canvas en blanco
+      console.error("[HeatmapChart] error de dibujo:", err);
+      setDrawError(err instanceof Error ? err.message : String(err));
+    }
   }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, offset, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, heatInt, oscOpen, remainStr]);
 
   // ================= MINIMAPA =================
@@ -962,7 +1001,9 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const lastStUp = ind.stUpConf[ind.stUpConf.length - 1];
   const zoomed = visibleCount < CANDLE_COUNT || offset > 0;
 
-  return (
+  // En pantalla completa se monta en un PORTAL directo a <body>: escapa de
+  // cualquier ancestro con transform/filter/will-change que rompería `position: fixed`.
+  const sectionEl = (
     <section
       className={`panel panel-corner ${fullscreen ? "flex flex-col overflow-hidden rounded-none border-0" : "anim-reveal"}`}
       style={
@@ -1051,6 +1092,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             </button>
           ))}
         </ToolGroup>
+        <ToolGroup label="Rango" title="Expandir el rango vertical para ver clusters y escalera de apalancamiento (órdenes arriba y abajo del precio)">
+          <button onClick={() => setLiqView((v) => !v)}
+            className={`px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wide transition-all ${liqView ? "bg-flare-400/15 text-flare-300 shadow-[inset_0_-2px_0_rgba(255,178,36,0.55)]" : "text-mist-500 hover:bg-ink-750 hover:text-mist-300"}`}>
+            {liqView ? "Liquidez ✓" : "Liquidez"}
+          </button>
+        </ToolGroup>
         <ToolGroup label="Calor" title="Intensidad del mapa de calor">
           <button onClick={() => setHeatInt((v) => Math.max(0.4, +(v - 0.15).toFixed(2)))} className="px-2 font-mono text-[12px] font-bold text-mist-400 hover:bg-ink-750 hover:text-mist-100">−</button>
           <span className="tick-num border-x border-ink-700 px-2 py-1 font-mono text-[10px] font-semibold text-mist-400">{heatInt.toFixed(2)}</span>
@@ -1128,6 +1175,24 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           onDoubleClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); }}
         />
 
+        {/* diagnóstico visible si el dibujo falla */}
+        {drawError && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-ink-950/85 p-6">
+            <div className="max-w-md border border-short-500/60 bg-ink-900 p-4">
+              <div className="font-display text-xs font-bold uppercase tracking-[0.18em] text-short-300">
+                Error al dibujar el heatmap
+              </div>
+              <p className="mt-2 font-mono text-[10px] leading-relaxed text-mist-400">{drawError}</p>
+              <button
+                onClick={() => { setDrawError(null); setVisibleCount(DEFAULT_VIS); setOffset(0); }}
+                className="mt-3 border border-long-500/50 bg-long-900/40 px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest text-long-300 hover:bg-long-900/70"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* botón volver al presente */}
         {offset > 0 && (
           <button onClick={() => setOffset(0)}
@@ -1190,4 +1255,6 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       </footer>
     </section>
   );
+
+  return fullscreen ? createPortal(sectionEl, document.body) : sectionEl;
 }
