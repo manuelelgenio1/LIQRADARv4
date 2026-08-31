@@ -42,7 +42,8 @@ function DirArrow({ dir }: { dir: TrendDir }) {
 }
 
 // valor subyacente de cada voto (para transparencia)
-const VALUE_OF: Record<string, (b: IndicatorBundle) => string> = {
+// recibe también el precio de cierre real (no un proxy)
+const VALUE_OF: Record<string, (b: IndicatorBundle, close: number) => string> = {
   "Cruce EMA": (b) => {
     const ef = b.emaFast[b.emaFast.length - 1] ?? 0;
     const es = b.emaSlow[b.emaSlow.length - 1] ?? 1;
@@ -50,10 +51,9 @@ const VALUE_OF: Record<string, (b: IndicatorBundle) => string> = {
   },
   MACD: (b) => `hist ${(b.hist[b.hist.length - 1] ?? 0).toFixed(2)}`,
   RSI: (b) => `rsi ${(b.rsi[b.rsi.length - 1] ?? 50).toFixed(0)}`,
-  Supertrend: (b) => {
+  Supertrend: (b, close) => {
     const st = b.st[b.st.length - 1] ?? 0;
-    const c = b.emaFast.length ? (b.emaFast[b.emaFast.length - 1] ?? 0) : 0;
-    return `${st > 0 && c > 0 ? (((c - st) / c) * 100).toFixed(2) : "0.00"}% del ST`;
+    return `${st > 0 && close > 0 ? (((close - st) / close) * 100).toFixed(2) : "0.00"}% del ST`;
   },
   ADX: (b) => `+DI ${(b.pdi[b.pdi.length - 1] ?? 0).toFixed(0)} / −DI ${(b.mdi[b.mdi.length - 1] ?? 0).toFixed(0)}`,
 };
@@ -173,7 +173,8 @@ export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibratio
       <div className="flex-1 border-t border-ink-700/50">
         {cons.votes.map((v) => {
           const vm = DIR_META[v.dir];
-          const val = VALUE_OF[v.name]?.(ind) ?? v.note;
+          const cur = state.candles[state.candles.length - 1]?.c ?? 0;
+          const val = VALUE_OF[v.name]?.(ind, cur) ?? v.note;
           return (
             <div
               key={v.name}
