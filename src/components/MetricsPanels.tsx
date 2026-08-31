@@ -163,6 +163,9 @@ export function DataQualityPanel({
   const status = cur < 35 ? { t: "ÓPTIMA", c: "text-long-300 border-long-500/40 bg-long-900/40" }
     : cur < 70 ? { t: "ESTABLE", c: "text-flare-300 border-flare-400/40 bg-flare-400/10" }
     : { t: "DEGRADADA", c: "text-short-300 border-short-500/40 bg-short-900/50" };
+  // color coherente con los 3 estados (el número y el sparkline usaban solo 2)
+  const latColor = cur < 35 ? "#2de0c0" : cur < 70 ? "#ffb224" : "#ff5d7e";
+  const latText = cur < 35 ? "text-long-300" : cur < 70 ? "text-flare-300" : "text-short-300";
   const liveCount = (source === "live" ? 1 : 0) + (liqSource === "okx" ? 1 : 0);
 
   const srcChip = (label: string, live: boolean, tip: string) => (
@@ -192,11 +195,11 @@ export function DataQualityPanel({
         <div className="flex-1">
           <div className="mb-1 flex justify-between font-mono text-[9px] uppercase tracking-[0.18em] text-mist-600">
             <span>Latencia ws {source === "live" ? "· medida" : "· sim"}</span>
-            <span className={`tick-num font-bold ${cur < 35 ? "text-long-300" : "text-flare-300"}`}>{cur.toFixed(0)} ms</span>
+            <span className={`tick-num font-bold ${latText}`}>{cur.toFixed(0)} ms</span>
           </div>
           <svg viewBox="0 0 100 36" className="h-10 w-full" preserveAspectRatio="none">
-            <polyline points={pts} fill="none" stroke={cur < 35 ? "#2de0c0" : "#ffb224"} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
-            <polygon points={`0,36 ${pts} 100,36`} fill={cur < 35 ? "rgba(45,224,192,0.12)" : "rgba(255,178,36,0.12)"} />
+            <polyline points={pts} fill="none" stroke={latColor} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
+            <polygon points={`0,36 ${pts} 100,36`} fill={`${latColor}1f`} />
           </svg>
         </div>
       </div>
