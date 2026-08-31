@@ -170,9 +170,9 @@ function LayersMenu({ layers, onToggle, open, setOpen }: { layers: Layers; onTog
 
 function ToolGroup({ label, children, title }: { label: string; children: React.ReactNode; title?: string }) {
   return (
-    <div className="flex shrink-0 flex-col gap-1" title={title}>
-      <span className="font-mono text-[8px] font-semibold uppercase tracking-[0.18em] text-mist-600">{label}</span>
-      <div className="flex items-stretch border border-ink-700 bg-ink-850/80">{children}</div>
+    <div className="group/tool flex shrink-0 flex-col gap-1" title={title}>
+      <span className="font-mono text-[8px] font-semibold uppercase tracking-[0.18em] text-mist-600 transition-colors duration-200 group-hover/tool:text-mist-400">{label}</span>
+      <div className="flex items-stretch border border-ink-700 bg-ink-850/80 transition-colors duration-200 group-hover/tool:border-ink-600">{children}</div>
     </div>
   );
 }
@@ -214,6 +214,9 @@ interface Hover { x: number; y: number; idx: number; price: number; heat: number
 export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd, ind, cfg, confluence, market = "perp" }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // canvas superior SOLO para el crosshair: así mover el ratón no obliga a
+  // re-renderizar el costoso render térmico del canvas base
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
   const offRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -909,31 +912,47 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       }
     }
 
-    // crosshair
-    if (hover && hover.x < plotW && !dragging.current) {
-      ctx.strokeStyle = "rgba(183,199,226,0.4)";
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(hover.x, plotTop); ctx.lineTo(hover.x, oscOpen ? subBottom : plotBottom);
-      ctx.moveTo(0, hover.y); ctx.lineTo(plotW, hover.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (hover.y >= plotTop && hover.y <= plotBottom) {
-        ctx.fillStyle = "#131e33";
-        ctx.fillRect(plotW, hover.y - 9, SCALE_W, 18);
-        ctx.strokeStyle = "rgba(143,163,196,0.6)";
-        ctx.strokeRect(plotW + 0.5, hover.y - 8.5, SCALE_W - 1, 17);
-        ctx.fillStyle = "#dbe6f7";
-        ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
-      }
-    }
-
     } catch (err) {
       // hace visible cualquier fallo de dibujo en lugar de dejar el canvas en blanco
       console.error("[HeatmapChart] error de dibujo:", err);
       setDrawError(err instanceof Error ? err.message : String(err));
     }
-  }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, offset, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, heatInt, oscOpen]);
+  }, [state, width, chartH, ind, cfg, osc, tfMin, view, visibleCount, offset, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, heatInt, oscOpen]);
+
+  // ================= CROSSHAIR (canvas superior, barato de re-dibujar) =================
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = width * dpr;
+    canvas.height = chartH * dpr;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, chartH);
+    const plotW = width - SCALE_W;
+    if (!hover || hover.x >= plotW || dragging.current) return;
+    const plotBottom = plotBottomOf(chartH, oscOpen);
+    const subBottom = chartH - TIME_H - 4;
+    ctx.font = "10px 'IBM Plex Mono', monospace";
+    ctx.textBaseline = "middle";
+    ctx.strokeStyle = "rgba(183,199,226,0.4)";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(hover.x, PAD_T); ctx.lineTo(hover.x, oscOpen ? subBottom : plotBottom);
+    ctx.moveTo(0, hover.y); ctx.lineTo(plotW, hover.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (hover.y >= PAD_T && hover.y <= plotBottom) {
+      ctx.fillStyle = "#131e33";
+      ctx.fillRect(plotW, hover.y - 9, SCALE_W, 18);
+      ctx.strokeStyle = "rgba(143,163,196,0.6)";
+      ctx.strokeRect(plotW + 0.5, hover.y - 8.5, SCALE_W - 1, 17);
+      ctx.fillStyle = "#dbe6f7";
+      ctx.textAlign = "left";
+      ctx.fillText(fmtPrice(hover.price, meta.decimals), plotW + 8, hover.y + 0.5);
+    }
+  }, [hover, width, chartH, oscOpen, meta.decimals]);
 
   // ================= MINIMAPA =================
   useEffect(() => {
@@ -1215,6 +1234,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             setGrabbing(true);
           }}
           onDoubleClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); setPriceOff(0); }}
+        />
+        {/* capa superior: solo el crosshair (no captura eventos) */}
+        <canvas
+          ref={overlayRef}
+          className="pointer-events-none absolute inset-0"
+          style={{ width: "100%", height: fullscreen ? "100%" : chartH, display: "block" }}
         />
 
         {/* diagnóstico visible si el dibujo falla */}
