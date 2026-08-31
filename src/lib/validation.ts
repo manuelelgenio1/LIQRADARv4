@@ -223,14 +223,8 @@ export function computeStats(log: PoolRecord[], symbol?: string, market?: "perp"
   };
 }
 
-export function fmtAgo(ts: number, now: number): string {
-  const s = Math.max(0, Math.floor((now - ts) / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
+// versión canónica en format.ts (se re-exporta para compatibilidad)
+export { fmtAgo } from "./format";
 
 // ============================================================
 // Backtest histórico: reproduce la detección del radar sobre velas

@@ -1,6 +1,7 @@
 import type { MarketState } from "../lib/market";
 import type { IndicatorBundle, IndicatorCfg, TrendDir } from "../lib/indicators";
 import { adxThrOf, mtfAdjust } from "../lib/indicators";
+import { MeterBar } from "./MeterBar";
 
 interface Props {
   state: MarketState;
@@ -187,12 +188,7 @@ export default function TrendConsensusPanel({ state, tfKey, ind, cfg, calibratio
                 <DirArrow dir={v.dir} />
                 {vm.label}
               </span>
-              <div className="h-1 flex-1 overflow-hidden bg-ink-800">
-                <div
-                  className="h-full transition-all duration-700"
-                  style={{ width: `${Math.max(4, Math.round(v.strength * 100))}%`, background: vm.bar, opacity: 0.85 }}
-                />
-              </div>
+              <MeterBar v={v.strength} color={vm.bar} height={4} minPct={4} track="bg-ink-800" />
               <span className="tick-num w-[30px] shrink-0 text-right font-mono text-[9px] text-mist-500">
                 {Math.round(v.strength * 100)}
               </span>

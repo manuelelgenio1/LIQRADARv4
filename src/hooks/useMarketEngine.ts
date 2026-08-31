@@ -32,6 +32,7 @@ import {
   type RawLiq,
 } from "../lib/live";
 import { getIndicatorCfg, computeIndicators, type TrendDir } from "../lib/indicators";
+import { readLS, writeLS } from "../lib/storage";
 import { syncPools, computeStats, loadPoolLog, type PoolRecord, type PoolStats } from "../lib/validation";
 import { playAlertBlip, playMillionLiq } from "../lib/sound";
 
@@ -58,28 +59,16 @@ interface Prefs {
 
 function loadPrefs(): Prefs {
   const d: Prefs = { symbol: SYMBOLS[0].symbol, tfKey: "5m", paused: false };
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<Prefs>;
-      if (SYMBOLS.some((s) => s.symbol === p.symbol)) d.symbol = p.symbol as string;
-      if (TIMEFRAMES.some((t) => t.key === p.tfKey)) d.tfKey = p.tfKey as string;
-      if (typeof p.paused === "boolean") d.paused = p.paused;
-    }
-  } catch {
-    /* valores por defecto */
-  }
+  const p = readLS<Partial<Prefs>>(LS_KEY, {});
+  if (SYMBOLS.some((s) => s.symbol === p.symbol)) d.symbol = p.symbol as string;
+  if (TIMEFRAMES.some((t) => t.key === p.tfKey)) d.tfKey = p.tfKey as string;
+  if (typeof p.paused === "boolean") d.paused = p.paused;
   return d;
 }
 
 function loadMarket(): MarketKind {
-  try {
-    const v = localStorage.getItem(MKT_KEY);
-    if (v === "spot" || v === "perp") return v;
-  } catch {
-    /* por defecto */
-  }
-  return "perp";
+  const v = readLS<string>(MKT_KEY, "perp");
+  return v === "spot" || v === "perp" ? v : "perp";
 }
 
 export function useMarketEngine() {

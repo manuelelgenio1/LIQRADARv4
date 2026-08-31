@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LiqCluster, MarketState } from "../lib/market";
-import { hashStr } from "../lib/market";
+import { hashStr, RADAR_CLUSTER_LIMIT } from "../lib/market";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
 interface Props { state: MarketState; }
@@ -25,7 +25,7 @@ export default function RadarScope({ state }: Props) {
   // protegido contra rango plano (evita posiciones NaN en los blips)
   const span = state.pMax - state.pMin || 1;
 
-  const blips = state.clusters.slice(0, 12).map((cl, i) => {
+  const blips = state.clusters.slice(0, RADAR_CLUSTER_LIMIT).map((cl, i) => {
     const frac = Math.abs(cl.price - cur) / span;
     const r = radiusFor(frac);
     const jitter = (hashStr(cl.id) % 100) / 100;

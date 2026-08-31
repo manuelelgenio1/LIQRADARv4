@@ -62,6 +62,11 @@ export const TIMEFRAMES: { key: string; minutes: number }[] = [
 export const CANDLE_COUNT = 128;
 export const HEAT_BINS = 48;
 
+// Acople explícito entre paneles: cuántos clústeres consume cada herramienta
+// de la MISMA fuente (state.clusters, orden nativo por distancia al precio).
+export const CHART_CLUSTER_LIMIT = 6;   // líneas del heatmap + chip "gráfico" de la lista
+export const RADAR_CLUSTER_LIMIT = 12;  // blips del radar
+
 export interface LiqCluster {
   id: string;
   price: number;

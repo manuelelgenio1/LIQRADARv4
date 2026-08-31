@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MarketState } from "../lib/market";
-import { fmtClock, fmtPrice, fmtUsd } from "../lib/format";
+import { fmtAgo, fmtClock, fmtPrice, fmtUsd } from "../lib/format";
 
 interface Props { state: MarketState; paused: boolean; liqSource?: "okx" | "sim"; }
 
@@ -13,13 +13,7 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: "real", label: "Reales" },
 ];
 
-function ago(t: number, now: number): string {
-  const s = Math.max(0, Math.floor((now - t) / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h`;
-}
+
 
 export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Props) {
   const { events, meta } = state;
@@ -223,7 +217,7 @@ export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Pr
                   className="tick-num w-[40px] shrink-0 text-right font-mono text-[8.5px] text-mist-600"
                   title={fmtClock(e.time)}
                 >
-                  {ago(e.time, now)}
+                  {fmtAgo(e.time, now)}
                 </span>
               </div>
             );

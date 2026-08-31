@@ -1,12 +1,14 @@
 import type { MarketState } from "../lib/market";
+import { CHART_CLUSTER_LIMIT } from "../lib/market";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
 
 interface Props { state: MarketState; market?: "perp" | "spot"; }
 
-// El heatmap dibuja clusters.slice(0, 6) y el radar slice(0, 12) sobre el
-// orden nativo (distancia al precio). La lista usa ESE mismo orden para que
-// cada fila corresponda 1:1 con su línea del gráfico y su blip del radar.
-const IN_CHART = 6;
+// El heatmap dibuja los primeros CHART_CLUSTER_LIMIT y el radar los primeros
+// RADAR_CLUSTER_LIMIT sobre el orden nativo (distancia al precio). La lista
+// usa ESE mismo orden para que cada fila corresponda 1:1 con su línea del
+// gráfico y su blip del radar.
+const IN_CHART = CHART_CLUSTER_LIMIT;
 
 export default function ClusterList({ state, market = "perp" }: Props) {
   const cur = state.candles[state.candles.length - 1].c;

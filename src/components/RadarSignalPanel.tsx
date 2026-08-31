@@ -3,6 +3,7 @@ import type { MarketState } from "../lib/market";
 import { computeLiqRegime } from "../lib/overlays";
 import { fmtCompact } from "../lib/format";
 import type { IndicatorBundle, TrendDir } from "../lib/indicators";
+import { DivergingBar } from "./MeterBar";
 
 interface Props {
   state: MarketState;
@@ -222,18 +223,7 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
               <span className="w-[108px] shrink-0 truncate font-mono text-[8px] uppercase tracking-wider text-mist-500">
                 {p.label}
               </span>
-              <span className="relative h-[5px] flex-1 overflow-hidden bg-ink-700/60">
-                <span className="absolute inset-y-0 left-1/2 w-px bg-ink-600" />
-                <span
-                  className="absolute inset-y-0 transition-all duration-700"
-                  style={{
-                    left: p.value >= 0 ? "50%" : `${50 + p.value * 50}%`,
-                    width: `${Math.abs(p.value) * 50}%`,
-                    background: p.color,
-                    opacity: 0.85,
-                  }}
-                />
-              </span>
+              <DivergingBar v={p.value} color={p.color} />
               <span
                 className={`tick-num w-[34px] shrink-0 text-right font-mono text-[8.5px] font-semibold ${
                   p.value > 0 ? "text-long-300" : p.value < 0 ? "text-short-300" : "text-mist-500"

@@ -2,6 +2,7 @@ import type { MarketState } from "../lib/market";
 import type { IndicatorBundle, IndicatorCfg, TrendDir } from "../lib/indicators";
 import { adxThrOf } from "../lib/indicators";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
+import { MeterBar } from "./MeterBar";
 
 interface Props {
   state: MarketState;
@@ -76,8 +77,12 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence, market =
   }
   const topOf = (r: Rung) => layout.get(r.id) ?? posOf(r.price);
 
-  const spotTop = topOf(rungs.find((r) => r.isSpot) as Rung);
-  const targetTop = topOf(rungs.find((r) => r.isTarget) as Rung);
+  // lookup seguro: spot y objetivo siempre existen (se añaden arriba), pero
+  // sin el cast evitamos un crash si eso cambiara en el futuro
+  const spotRung = rungs.find((r) => r.isSpot);
+  const targetRung = rungs.find((r) => r.isTarget);
+  const spotTop = spotRung ? topOf(spotRung) : 50;
+  const targetTop = targetRung ? topOf(targetRung) : 50;
 
   // factores de probabilidad (datos reales, sin números inventados)
   const adxNow = ind.adx[ind.adx.length - 1] ?? 0;
@@ -223,12 +228,7 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence, market =
                 <span className="w-[104px] shrink-0 truncate font-mono text-[8px] uppercase tracking-wider text-mist-500">
                   {f.label}
                 </span>
-                <span className="h-[5px] flex-1 overflow-hidden bg-ink-700/60">
-                  <span
-                    className="block h-full transition-all duration-700"
-                    style={{ width: `${Math.round(f.v * 100)}%`, background: col, opacity: 0.8 }}
-                  />
-                </span>
+                <MeterBar v={f.v} color={col} />
                 <span className="tick-num w-8 shrink-0 text-right font-mono text-[8.5px] font-semibold text-mist-300">
                   {Math.round(f.v * 100)}
                 </span>

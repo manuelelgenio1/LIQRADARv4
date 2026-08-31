@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { MarketState } from "../lib/market";
-import { CANDLE_COUNT, HEAT_BINS } from "../lib/market";
+import { CANDLE_COUNT, CHART_CLUSTER_LIMIT, HEAT_BINS } from "../lib/market";
 import { adxThrOf, mtfAdjust, type IndicatorBundle, type IndicatorCfg, type TrendDir } from "../lib/indicators";
 import { computeSessions, computeVoids, computeVwap, computeVolProfile, computeLiqRegime } from "../lib/overlays";
 import { fmtAxisTime, fmtCompact, fmtHM, fmtPct, fmtPrice, fmtUsd } from "../lib/format";
+import { readFlag, readLS, writeFlag, writeLS } from "../lib/storage";
 
 type Osc = "cvd" | "macd" | "rsi" | "adx" | "vol";
 type LayerId = "clusters" | "lev" | "sessions" | "ema" | "st" | "cvdOv" | "voids" | "vwap" | "vp";
@@ -35,6 +36,12 @@ const LEV_KEY = "liqradar:lev:v2";
 const LOG_KEY = "liqradar:log:v1";
 const LAYER_KEY = "liqradar:layers:v1";
 const HEAT_KEY = "liqradar:heatint:v1";
+const LIQVIEW_KEY = "liqradar:liqview:v1";
+
+// Geometría unificada del área de precio: la usan el dibujo, la rueda, el
+// arrastre y el tooltip para que todos calculen con los MISMOS números.
+const plotBottomOf = (chartH: number, oscOpen: boolean) =>
+  chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12;
 
 const DEFAULT_LAYERS: Layers = {
   clusters: true, lev: true, sessions: true, ema: true, st: true, cvdOv: false, voids: true, vwap: true, vp: true,
@@ -72,44 +79,26 @@ function sampleRamp(t: number, stops: [number, number, number, number][]): [numb
 // zoom por defecto: 88 de 128 velas → deja 40 velas de historia para desplazarse
 const DEFAULT_VIS = 88;
 function loadZoom(tf: string): number {
-  try {
-    const m = JSON.parse(localStorage.getItem(ZOOM_KEY) ?? "{}") as Record<string, number>;
-    const v = m[tf];
-    if (Number.isFinite(v)) return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, Math.round(v)));
-  } catch { /* sin almacenamiento */ }
+  const m = readLS<Record<string, number>>(ZOOM_KEY, {});
+  const v = m[tf];
+  if (Number.isFinite(v)) return Math.max(MIN_VIS, Math.min(CANDLE_COUNT, Math.round(v)));
   return DEFAULT_VIS;
 }
 function loadLayers(): Layers {
   const out = { ...DEFAULT_LAYERS };
-  try {
-    const raw = localStorage.getItem(LAYER_KEY);
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<Layers>;
-      for (const k of Object.keys(out) as LayerId[]) if (typeof p[k] === "boolean") out[k] = p[k] as boolean;
-    }
-  } catch { /* valores por defecto */ }
+  const p = readLS<Partial<Layers>>(LAYER_KEY, {});
+  for (const k of Object.keys(out) as LayerId[]) if (typeof p[k] === "boolean") out[k] = p[k] as boolean;
   return out;
 }
 function loadLevOn(): Record<number, boolean> {
   const d: Record<number, boolean> = { 5: false, 10: true, 20: true, 50: true, 100: true };
-  try {
-    const raw = localStorage.getItem(LEV_KEY);
-    if (raw) {
-      const p = JSON.parse(raw) as Record<string, boolean>;
-      for (const lv of LEVS) if (typeof p[String(lv)] === "boolean") d[lv] = p[String(lv)];
-    }
-  } catch { /* valores por defecto */ }
+  const p = readLS<Record<string, boolean>>(LEV_KEY, {});
+  for (const lv of LEVS) if (typeof p[String(lv)] === "boolean") d[lv] = p[String(lv)];
   return d;
 }
 function loadHeatInt(): number {
-  try {
-    const v = localStorage.getItem(HEAT_KEY);
-    if (v) {
-      const n = Number(v);
-      if (Number.isFinite(n)) return Math.max(0.4, Math.min(2.2, n));
-    }
-  } catch { /* valor por defecto */ }
-  return 1.05;
+  const n = readLS<number>(HEAT_KEY, 1.05);
+  return Number.isFinite(n) ? Math.max(0.4, Math.min(2.2, n)) : 1.05;
 }
 
 const CAN_FILTER = (() => {
@@ -191,6 +180,35 @@ function ToolDivider() {
   return <span className="h-8 w-px shrink-0 self-center bg-ink-700/60" />;
 }
 
+// Tiempo restante para el cierre de la vela actual (UTC; semanas inician en lunes).
+function candleRemainStr(tfMin: number, now: number): string {
+  const stepMs = tfMin * 60_000;
+  let start: number;
+  if (tfMin >= 10080) {
+    const d = new Date(now);
+    const day = (d.getUTCDay() + 6) % 7;
+    start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day);
+  } else {
+    start = Math.floor(now / stepMs) * stepMs;
+  }
+  const remain = start + stepMs - now;
+  const s = Math.max(0, Math.floor(remain / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const p = (x: number) => String(x).padStart(2, "0");
+  return tfMin >= 1440 ? `${p(h)}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
+}
+
+// Chip con su PROPIO timer de 1 Hz: así el resto del panel no se re-renderiza
+// cada segundo solo para actualizar un texto.
+function NextCandleChip({ tfMin }: { tfMin: number }) {
+  const [str, setStr] = useState(() => candleRemainStr(tfMin, Date.now()));
+  useEffect(() => {
+    const id = window.setInterval(() => setStr(candleRemainStr(tfMin, Date.now())), 1000);
+    return () => window.clearInterval(id);
+  }, [tfMin]);
+  return <span className="tick-num px-2.5 py-1 font-mono text-[10px] font-bold text-mist-300">{str}</span>;
+}
+
 interface Hover { x: number; y: number; idx: number; price: number; heat: number; }
 
 export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realCvd, ind, cfg, confluence, market = "perp" }: Props) {
@@ -211,7 +229,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const [layersOpen, setLayersOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [heatInt, setHeatInt] = useState<number>(loadHeatInt);
-  const [logScale, setLogScale] = useState<boolean>(() => { try { return localStorage.getItem(LOG_KEY) === "1"; } catch { return false; } });
+  const [logScale, setLogScale] = useState<boolean>(() => readFlag(LOG_KEY));
 
   const meta = state.meta;
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
@@ -223,10 +241,8 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   const [priceOff, setPriceOff] = useState(0);
   const [drawError, setDrawError] = useState<string | null>(null);
   // expande el rango vertical para mostrar clusters + escalera de apalancamiento
-  const [liqView, setLiqView] = useState<boolean>(() => {
-    try { return localStorage.getItem("liqradar:liqview:v1") === "1"; } catch { return false; }
-  });
-  useEffect(() => { try { localStorage.setItem("liqradar:liqview:v1", liqView ? "1" : "0"); } catch {} }, [liqView]);
+  const [liqView, setLiqView] = useState<boolean>(() => readFlag(LIQVIEW_KEY));
+  useEffect(() => { writeFlag(LIQVIEW_KEY, liqView); }, [liqView]);
 
   // ventana visible: [start, end) con offset desde la derecha.
   // Cuando liqView está ON, el rango vertical se expande para incluir los
@@ -294,16 +310,14 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   // persistencia
   useEffect(() => { setVisibleCount(loadZoom(tfKey)); setOffset(0); setPriceOff(0); }, [tfKey]);
   useEffect(() => {
-    try {
-      const m = JSON.parse(localStorage.getItem(ZOOM_KEY) ?? "{}") as Record<string, number>;
-      m[tfKey] = visibleCount;
-      localStorage.setItem(ZOOM_KEY, JSON.stringify(m));
-    } catch { /* sin almacenamiento */ }
+    const m = readLS<Record<string, number>>(ZOOM_KEY, {});
+    m[tfKey] = visibleCount;
+    writeLS(ZOOM_KEY, m);
   }, [visibleCount, tfKey]);
-  useEffect(() => { try { localStorage.setItem(LEV_KEY, JSON.stringify(levOn)); } catch {} }, [levOn]);
-  useEffect(() => { try { localStorage.setItem(LAYER_KEY, JSON.stringify(layers)); } catch {} }, [layers]);
-  useEffect(() => { try { localStorage.setItem(LOG_KEY, logScale ? "1" : "0"); } catch {} }, [logScale]);
-  useEffect(() => { try { localStorage.setItem(HEAT_KEY, String(heatInt)); } catch {} }, [heatInt]);
+  useEffect(() => { writeLS(LEV_KEY, levOn); }, [levOn]);
+  useEffect(() => { writeLS(LAYER_KEY, layers); }, [layers]);
+  useEffect(() => { writeFlag(LOG_KEY, logScale); }, [logScale]);
+  useEffect(() => { writeLS(HEAT_KEY, heatInt); }, [heatInt]);
 
   // medición del contenedor
   useEffect(() => {
@@ -333,29 +347,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   }, [fullscreen]);
 
   // cuenta regresiva de la vela
-  const [remainStr, setRemainStr] = useState("");
-  useEffect(() => {
-    const calc = () => {
-      const now = Date.now();
-      const stepMs = tfMin * 60_000;
-      let start: number;
-      if (tfMin >= 10080) {
-        const d = new Date(now);
-        const day = (d.getUTCDay() + 6) % 7;
-        start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day);
-      } else {
-        start = Math.floor(now / stepMs) * stepMs;
-      }
-      const remain = start + stepMs - now;
-      const s = Math.max(0, Math.floor(remain / 1000));
-      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-      const p = (x: number) => String(x).padStart(2, "0");
-      setRemainStr(tfMin >= 1440 ? `${p(h)}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`);
-    };
-    calc();
-    const id = window.setInterval(calc, 1000);
-    return () => window.clearInterval(id);
-  }, [tfMin]);
+
 
   // overlays derivados
   const sessions = useMemo(() => computeSessions(state.warm && state.warm.length >= CANDLE_COUNT ? state.warm : state.candles, tfMin), [state.warm, state.candles, tfMin]);
@@ -387,7 +379,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       const plotW = Math.max(1, width - SCALE_W);
       if (e.shiftKey) {
         // paneo vertical: rueda arriba/abajo mueve la ventana de precios
-        const plotH = chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12 - PAD_T;
+        const plotH = plotBottomOf(chartH, oscOpen) - PAD_T;
         if (plotH > 0) {
           setPriceOff((p) => Math.max(-3, Math.min(3, p + (e.deltaY / plotH) * 0.35)));
         }
@@ -428,7 +420,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const { candles, heat, pMin, pMax, clusters, cvd } = state;
     const plotW = width - SCALE_W;
     const plotTop = PAD_T;
-    const plotBottom = chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12;
+    const plotBottom = plotBottomOf(chartH, oscOpen);
     const plotH = plotBottom - plotTop;
     const subTop = plotBottom + 12;
     const subBottom = chartH - TIME_H - 4;
@@ -589,7 +581,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     }
 
     // clústeres
-    if (layers.clusters) for (const cl of clusters.slice(0, 6)) {
+    if (layers.clusters) for (const cl of clusters.slice(0, CHART_CLUSTER_LIMIT)) {
       const cy = y(cl.price);
       if (cy < plotTop || cy > plotBottom) continue;
       const col = cl.side === "long" ? "45,224,192" : "255,93,126";
@@ -941,7 +933,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       console.error("[HeatmapChart] error de dibujo:", err);
       setDrawError(err instanceof Error ? err.message : String(err));
     }
-  }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, offset, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, heatInt, oscOpen, remainStr]);
+  }, [state, width, chartH, hover, ind, cfg, osc, tfMin, view, visibleCount, offset, levOn, realCvd, logScale, layers, liqVoids, sessions, vwap, volProfile, scaleY, scalePrice, meta, heatInt, oscOpen]);
 
   // ================= MINIMAPA =================
   useEffect(() => {
@@ -985,7 +977,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const x = e.clientX - rect.left;
     const yy = e.clientY - rect.top;
     const plotW = width - SCALE_W;
-    const plotBottom = chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12;
+    const plotBottom = plotBottomOf(chartH, oscOpen);
     const vIdx = Math.min(visibleCount - 1, Math.max(0, Math.floor((x / plotW) * visibleCount)));
     const idx = view.start + vIdx;
     const price = scalePrice(yy, PAD_T, plotBottom - PAD_T);
@@ -1010,7 +1002,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       setOffset(newOff);
       // paneo vertical: arrastrar hacia abajo muestra precios más altos,
       // arrastrar hacia arriba muestra precios más bajos (estilo TradingView)
-      const plotH = chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12 - PAD_T;
+      const plotH = plotBottomOf(chartH, oscOpen) - PAD_T;
       if (plotH > 0 && dragging.current.span > 0) {
         const dFrac = dy / plotH;
         setPriceOff(Math.max(-3, Math.min(3, dragging.current.startPrice + dFrac)));
@@ -1171,7 +1163,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           ))}
         </ToolGroup>
         <ToolGroup label="Próxima vela">
-          <span className="tick-num px-2.5 py-1 font-mono text-[10px] font-bold text-mist-300">{remainStr}</span>
+          <NextCandleChip tfMin={tfMin} />
         </ToolGroup>
       </div>
 

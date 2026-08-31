@@ -61,6 +61,16 @@ export function fmtAxisTime(ts: number, tfMinutes: number): string {
   return `${MESES[d.getUTCMonth()]} '${String(d.getUTCFullYear()).slice(2)}`;
 }
 
+// tiempo relativo ("12s", "3m", "1h 5m") — usado por el feed y el laboratorio
+export function fmtAgo(ts: number, now: number): string {
+  if (!Number.isFinite(ts)) return "—";
+  const s = Math.max(0, Math.floor((now - ts) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
 export function fmtCountdown(ms: number): string {
   if (!Number.isFinite(ms)) return "—";
   const s = Math.max(0, Math.floor(ms / 1000));

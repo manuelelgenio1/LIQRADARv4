@@ -3,6 +3,7 @@ import type { BacktestResult, PoolRecord, PoolStats } from "../lib/validation";
 import { fmtAgo, runBacktest } from "../lib/validation";
 import { fmtPrice, fmtUsd } from "../lib/format";
 import type { Candle } from "../lib/market";
+import { MeterBar } from "./MeterBar";
 
 interface Props {
   log: PoolRecord[];
@@ -418,15 +419,6 @@ function BacktestBlock({ bt, symbol }: { bt: BacktestResult; symbol: string }) {
   };
   const m = SIGNAL_META[bt.signal];
 
-  const Bar = ({ v, color }: { v: number; color: string }) => (
-    <div className="h-1.5 flex-1 overflow-hidden bg-ink-700/60">
-      <div
-        className="h-full transition-all duration-700"
-        style={{ width: `${Number.isFinite(v) ? Math.min(100, v * 100) : 0}%`, background: color }}
-      />
-    </div>
-  );
-
   return (
     <div className="anim-reveal grid grid-cols-1 gap-4 border-b border-ink-700/50 bg-ink-900/40 px-4 py-3 lg:grid-cols-12 lg:items-center">
       <div className="lg:col-span-3">
@@ -444,7 +436,7 @@ function BacktestBlock({ bt, symbol }: { bt: BacktestResult; symbol: string }) {
           <span className="w-[130px] shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">
             Pools del radar
           </span>
-          <Bar v={bt.hitRate} color="#2de0c0" />
+          <MeterBar v={bt.hitRate} color="#2de0c0" height={6} />
           <span className="tick-num w-[42px] shrink-0 text-right font-mono text-[10px] font-bold text-long-300">
             {pct(bt.hitRate)}
           </span>
@@ -453,7 +445,7 @@ function BacktestBlock({ bt, symbol }: { bt: BacktestResult; symbol: string }) {
           <span className="w-[130px] shrink-0 font-mono text-[8.5px] uppercase tracking-wider text-mist-500">
             Controles al azar
           </span>
-          <Bar v={bt.controlHitRate} color="#5f7396" />
+          <MeterBar v={bt.controlHitRate} color="#5f7396" height={6} />
           <span className="tick-num w-[42px] shrink-0 text-right font-mono text-[10px] font-bold text-mist-400">
             {pct(bt.controlHitRate)}
           </span>
