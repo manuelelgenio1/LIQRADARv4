@@ -66,6 +66,13 @@ export default function ValidationLab({ log, stats, symbol, decimals, lastSync, 
     }, 60);
   };
 
+  // al cambiar de símbolo o mercado, invalidar el backtest anterior:
+  // sus velas ya no corresponden a este activo (evita mostrar datos viejos
+  // bajo la etiqueta del símbolo nuevo)
+  useEffect(() => {
+    setBt(null);
+  }, [symbol, market]);
+
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
