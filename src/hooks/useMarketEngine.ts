@@ -32,7 +32,7 @@ import {
   type RawLiq,
 } from "../lib/live";
 import { getIndicatorCfg, computeIndicators, type TrendDir } from "../lib/indicators";
-import { readLS, writeLS } from "../lib/storage";
+import { readLS, writeLS, readFlag, writeFlag } from "../lib/storage";
 import { syncPools, computeStats, loadPoolLog, type PoolRecord, type PoolStats } from "../lib/validation";
 import { playAlertBlip, playMillionLiq } from "../lib/sound";
 
