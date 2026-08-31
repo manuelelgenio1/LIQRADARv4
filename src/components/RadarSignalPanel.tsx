@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { MarketState } from "../lib/market";
 import { computeLiqRegime } from "../lib/overlays";
+import { fmtCompact } from "../lib/format";
 import type { IndicatorBundle, TrendDir } from "../lib/indicators";
 
 interface Props {
@@ -78,7 +79,9 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
         label: "CVD (order flow)",
         value: cvdVal,
         weight: 0.9,
-        note: last >= 0 ? "delta neto comprador" : "delta neto vendedor",
+        note: `${
+          cvdVal > 0.1 ? "flujo comprador" : cvdVal < -0.1 ? "flujo vendedor" : "flujo neutro"
+        } reciente · CVD acumulado ${fmtCompact(last)}`,
         color: cvdVal > 0 ? "#2de0c0" : cvdVal < 0 ? "#ff5d7e" : "#5f7396",
       });
     }
