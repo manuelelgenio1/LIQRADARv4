@@ -143,7 +143,7 @@ export default function ClusterList({ state, market = "perp" }: Props) {
                 </div>
               </div>
 
-              <span className={`tick-num relative text-right font-mono text-[10.5px] ${dist < 0 ? "text-short-300" : "text-long-300"}`}>
+              <span className={`tick-num relative text-right font-mono text-[10.5px] ${isLong ? "text-long-300" : "text-short-300"}`}>
                 {fmtPct(dist, 2)}
               </span>
               <span className="tick-num relative text-right font-mono text-[11px] font-bold text-flare-300">
