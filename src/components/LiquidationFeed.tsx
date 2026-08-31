@@ -249,7 +249,7 @@ export default function LiquidationFeed({ state, paused, liqSource = "sim" }: Pr
                   total <= 0 ? "bg-ink-700/70" : shortDominant ? "bg-long-400/80" : "bg-short-400/80"
                 }`}
                 style={{ height: `${h}%` }}
-                title={`${fmtUsd(b.long)} longs liquidados (→ presión alcista) · ${fmtUsd(b.short)} shorts liquidados (→ presión bajista)`}
+                title={`${fmtUsd(b.long)} longs liquidados (→ presión bajista) · ${fmtUsd(b.short)} shorts liquidados (→ presión alcista)`}
               />
             );
           })}
