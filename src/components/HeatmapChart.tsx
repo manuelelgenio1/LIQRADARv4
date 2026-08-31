@@ -215,8 +215,12 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
 
   const meta = state.meta;
   const tfMin = timeframes.find((t) => t.key === tfKey)?.minutes ?? 5;
-  const dragging = useRef<{ startX: number; startOff: number } | null>(null);
+  const dragging = useRef<{ startX: number; startY: number; startOff: number; startPrice: number; span: number } | null>(null);
   const [grabbing, setGrabbing] = useState(false);
+  // paneo vertical: fracción del span de precios (0 = velas centradas).
+  // Arrastrar arriba/abajo mueve la ventana de precios para revelar las
+  // órdenes (clusters / escalera) que viven fuera del rango de las velas.
+  const [priceOff, setPriceOff] = useState(0);
   const [drawError, setDrawError] = useState<string | null>(null);
   // expande el rango vertical para mostrar clusters + escalera de apalancamiento
   const [liqView, setLiqView] = useState<boolean>(() => {
@@ -260,8 +264,16 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
       yMax = hi;
     }
     const pad = (yMax - yMin) * 0.06 || 1;
-    return { start, end, yMin: yMin - pad, yMax: yMax + pad };
-  }, [state.candles, state.clusters, visibleCount, offset, liqView, levOn]);
+    yMin -= pad;
+    yMax += pad;
+    // paneo vertical: desplazar la ventana de precios completa
+    if (priceOff !== 0) {
+      const span = yMax - yMin;
+      yMin += priceOff * span;
+      yMax += priceOff * span;
+    }
+    return { start, end, yMin, yMax };
+  }, [state.candles, state.clusters, visibleCount, offset, liqView, levOn, priceOff]);
 
   // escalas de precio (lineal o log)
   const scaleY = useCallback((p: number, plotTop: number, plotH: number) => {
@@ -280,7 +292,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
   }, [logScale, view.yMin, view.yMax]);
 
   // persistencia
-  useEffect(() => { setVisibleCount(loadZoom(tfKey)); setOffset(0); }, [tfKey]);
+  useEffect(() => { setVisibleCount(loadZoom(tfKey)); setOffset(0); setPriceOff(0); }, [tfKey]);
   useEffect(() => {
     try {
       const m = JSON.parse(localStorage.getItem(ZOOM_KEY) ?? "{}") as Record<string, number>;
@@ -363,6 +375,30 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     setVisibleCount(next);
     setOffset(newOff);
   };
+
+  // Rueda nativa (no-pasiva): zoom al cursor · Shift+rueda = paneo vertical
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const plotW = Math.max(1, width - SCALE_W);
+      if (e.shiftKey) {
+        // paneo vertical: rueda arriba/abajo mueve la ventana de precios
+        const plotH = chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12 - PAD_T;
+        if (plotH > 0) {
+          setPriceOff((p) => Math.max(-3, Math.min(3, p + (e.deltaY / plotH) * 0.35)));
+        }
+      } else {
+        const anchor = Math.max(0, Math.min(1, x / plotW));
+        zoomAt(e.deltaY > 0 ? 1 : -1, anchor);
+      }
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, [width, chartH, oscOpen, visibleCount, offset, view.start]);
 
   const exportPng = () => {
     const canvas = canvasRef.current;
@@ -967,16 +1003,24 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     const onMoveDrag = (e: MouseEvent) => {
       if (!dragging.current) return;
       const dx = e.clientX - dragging.current.startX;
+      const dy = e.clientY - dragging.current.startY;
       const plotW = width - SCALE_W;
       const dIdx = Math.round((dx / plotW) * visibleCount);
       const newOff = Math.max(0, Math.min(CANDLE_COUNT - visibleCount, dragging.current.startOff + dIdx));
       setOffset(newOff);
+      // paneo vertical: arrastrar hacia abajo muestra precios más altos,
+      // arrastrar hacia arriba muestra precios más bajos (estilo TradingView)
+      const plotH = chartH - TIME_H - (oscOpen ? SUB_H : 0) - 12 - PAD_T;
+      if (plotH > 0 && dragging.current.span > 0) {
+        const dFrac = dy / plotH;
+        setPriceOff(Math.max(-3, Math.min(3, dragging.current.startPrice + dFrac)));
+      }
     };
     const onUp = () => { dragging.current = null; miniDrag.current = false; document.body.style.cursor = ""; setGrabbing(false); };
     window.addEventListener("mousemove", onMoveDrag);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMoveDrag); window.removeEventListener("mouseup", onUp); };
-  }, [width, visibleCount]);
+  }, [width, visibleCount, chartH, oscOpen]);
 
   // centra la ventana visible en el índice del minimapa correspondiente a x
   const jumpMinimap = (clientX: number, el: HTMLCanvasElement) => {
@@ -1077,7 +1121,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           ))}
         </ToolGroup>
         <ToolDivider />
-        <ToolGroup label="Zoom" title="Rueda = zoom al cursor · arrastrar = desplazarse">
+        <ToolGroup label="Zoom" title="Rueda = zoom al cursor · Shift+rueda o arrastrar ↕ = mover precios · arrastrar ↔ = mover tiempo">
           <button onClick={() => zoomAt(1)} className="px-2 font-mono text-[12px] font-bold text-mist-400 hover:bg-ink-750 hover:text-mist-100" title="Alejar">−</button>
           <button onClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); }}
             className={`tick-num border-x border-ink-700 px-2 py-1 font-mono text-[10px] font-semibold hover:bg-ink-750 ${zoomed ? "text-flare-300" : "text-mist-400"}`}
@@ -1161,18 +1205,24 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
             width: "100%",
             height: fullscreen ? "100%" : chartH,
             display: "block",
-            // arrastrar siempre es posible (paneo); se muestra "grab" cuando hay historia que recorrer
-            cursor: grabbing ? "grabbing" : offset > 0 || visibleCount < CANDLE_COUNT ? "grab" : "crosshair",
+            // arrastrar siempre es posible (paneo horizontal + vertical)
+            cursor: grabbing ? "grabbing" : offset > 0 || priceOff !== 0 || visibleCount < CANDLE_COUNT ? "grab" : "crosshair",
             touchAction: "none",
           }}
           onMouseMove={onMove}
           onMouseLeave={() => setHover(null)}
           onMouseDown={(e) => {
-            dragging.current = { startX: e.clientX, startOff: offset };
+            dragging.current = {
+              startX: e.clientX,
+              startY: e.clientY,
+              startOff: offset,
+              startPrice: priceOff,
+              span: view.yMax - view.yMin,
+            };
             document.body.style.cursor = "grabbing";
             setGrabbing(true);
           }}
-          onDoubleClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); }}
+          onDoubleClick={() => { setVisibleCount(DEFAULT_VIS); setOffset(0); setPriceOff(0); }}
         />
 
         {/* diagnóstico visible si el dibujo falla */}
@@ -1194,10 +1244,11 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
         )}
 
         {/* botón volver al presente */}
-        {offset > 0 && (
-          <button onClick={() => setOffset(0)}
-            className="anim-feed-in absolute right-24 top-2 z-20 flex items-center gap-1.5 border border-flare-400/50 bg-ink-900/90 px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-flare-300 transition-all hover:bg-flare-400/20">
-            ⟶ Al presente
+        {(offset > 0 || priceOff !== 0) && (
+          <button onClick={() => { setOffset(0); setPriceOff(0); }}
+            className="anim-feed-in absolute right-24 top-2 z-20 flex items-center gap-1.5 border border-flare-400/50 bg-ink-900/90 px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase tracking-widest text-flare-300 transition-all hover:bg-flare-400/20"
+            title="Volver al presente y recentrar el eje de precios">
+            ⟶ Al presente{priceOff !== 0 ? " · centrar" : ""}
           </button>
         )}
 
@@ -1250,7 +1301,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
           <span className="border border-ink-700 bg-ink-850 px-1.5 py-0.5 text-mist-400">{tfKey}</span>
           <span className="border border-ink-700 bg-ink-850 px-1.5 py-0.5 text-mist-400">{logScale ? "LOG" : "LIN"}</span>
           <span className={`border px-1.5 py-0.5 ${zoomed ? "border-flare-400/40 text-flare-300" : "border-ink-700 bg-ink-850 text-mist-400"}`}>×{(CANDLE_COUNT / visibleCount).toFixed(1)}</span>
-          <span className="text-mist-600">rueda = zoom · arrastrar = mover · doble clic = reset</span>
+          <span className="text-mist-600">rueda = zoom · Shift+rueda/arrastrar ↕ = precios · doble clic = reset</span>
         </span>
       </footer>
     </section>
