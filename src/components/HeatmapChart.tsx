@@ -376,7 +376,7 @@ export default function HeatmapChart({ state, tfKey, setTfKey, timeframes, realC
     setOffset(newOff);
   };
 
-  // Rueda nativa (no-pasiva): zoom al cursor · Shift+rueda = paneo vertical
+  // Rueda nativa (no-pasiva): zoom anclado al cursor · Shift+rueda = paneo vertical
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
