@@ -17,14 +17,26 @@ const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar
   lateral: { label: "LATERAL", dot: "bg-mist-500", text: "text-mist-400", bar: "#5f7396", arrow: "—" },
 };
 
-export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedAt = 0, market = "perp", error = false }: Props) {
+// Etiqueta de frescura con su PROPIO timer de 1 Hz: así el resto de la franja
+// no se re-renderiza cada segundo solo para actualizar "hace Xs".
+function FreshnessChip({ updatedAt }: { updatedAt: number }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
   const ago = updatedAt > 0 ? Math.max(0, Math.round((now - updatedAt) / 1000)) : null;
+  return (
+    <span
+      className="font-mono text-[8.5px] uppercase tracking-widest text-mist-600"
+      title="Refresco: 30 s en vivo · 500 velas por temporalidad"
+    >
+      {ago != null ? `hace ${ago}s` : "…"} · 500v
+    </span>
+  );
+}
 
+export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedAt = 0, market = "perp", error = false }: Props) {
   // pulso al cambiar de dirección (el color cambia al instante; el pulso lo anuncia)
   const prevDirs = useRef<Record<string, TrendDir>>({});
   const pulseTimer = useRef<number | null>(null);
@@ -163,9 +175,7 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
               />
               {aligned ? `alineado ${aligned}` : "sin alineación"}
             </div>
-            <span className="font-mono text-[8.5px] uppercase tracking-widest text-mist-600" title="Refresco: 30 s en vivo · 500 velas por temporalidad">
-              {ago != null ? `hace ${ago}s` : "…"} · 500v
-            </span>
+            <FreshnessChip updatedAt={updatedAt} />
           </>
         )}
       </div>
