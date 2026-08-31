@@ -72,9 +72,10 @@ export default function OrderBookPanel({ state, live, market = "perp" }: Props) 
     );
   }
 
-  const maxTotal = Math.max(bids[bids.length - 1].total, asks[asks.length - 1].total);
+  const maxTotal = Math.max(bids[bids.length - 1].total, asks[asks.length - 1].total) || 1;
   const mid = (bids[0].price + asks[0].price) / 2;
-  const spread = ((asks[0].price - bids[0].price) / mid) * 100;
+  // protegido contra mid degenerado (evita mostrar "NaN%" en el spread)
+  const spread = mid > 0 ? ((asks[0].price - bids[0].price) / mid) * 100 : 0;
   const bidPct = Math.max(0, Math.min(100, 50 + imbalance * 50));
   const rowSource = live ? (market === "perp" ? "futuros" : "spot") : "";
 
