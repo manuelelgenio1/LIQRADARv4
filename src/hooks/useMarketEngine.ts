@@ -132,6 +132,7 @@ export function useMarketEngine() {
   // confluencia multi-TF
   const [confluence, setConfluence] = useState<{ tf: string; dir: TrendDir; strength: number }[] | null>(null);
   const [confluenceAt, setConfluenceAt] = useState(0);
+  const [confluenceErr, setConfluenceErr] = useState(false);
   const reloadConfluenceRef = useRef<() => void>(() => {});
 
   // calibración fina (persistida)
@@ -400,6 +401,10 @@ export function useMarketEngine() {
   // ---------- CONFLUENCIA MULTI-TF (misma ventana que el gráfico: WARMUP_COUNT) ----------
   useEffect(() => {
     if (source === "connecting") return;
+    // al cambiar símbolo/mercado/fuente se invalida la confluencia anterior:
+    // nunca mostrar tendencias de otro activo bajo el símbolo nuevo
+    setConfluence(null);
+    setConfluenceErr(false);
     let cancelled = false;
     const tfs = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
     const m = SYMBOLS.find((x) => x.symbol === symbol) ?? SYMBOLS[0];
@@ -429,6 +434,10 @@ export function useMarketEngine() {
         if (items.length) {
           setConfluence(items);
           setConfluenceAt(Date.now());
+          setConfluenceErr(false);
+        } else {
+          // las 7 peticiones fallaron → marcar indisponible (no datos viejos)
+          setConfluenceErr(true);
         }
       } else {
         if (cancelled) return;
@@ -440,6 +449,7 @@ export function useMarketEngine() {
         });
         setConfluence(items);
         setConfluenceAt(Date.now());
+        setConfluenceErr(false);
       }
     };
     reloadConfluenceRef.current = () => void load();
@@ -562,6 +572,7 @@ export function useMarketEngine() {
     realCvd,
     confluence,
     confluenceAt,
+    confluenceErr,
     calibration,
     setCalibration,
     poolLog,

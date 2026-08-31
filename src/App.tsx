@@ -94,6 +94,7 @@ function Dashboard() {
           activeTf={engine.tfKey}
           updatedAt={engine.confluenceAt}
           market={engine.market}
+          error={engine.confluenceErr}
         />
 
         {/* señal integrada del radar */}

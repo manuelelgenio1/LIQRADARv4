@@ -8,6 +8,7 @@ interface Props {
   activeTf: string;
   updatedAt?: number;
   market?: "perp" | "spot";
+  error?: boolean;
 }
 
 const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar: string; arrow: string }> = {
@@ -16,7 +17,7 @@ const DIR_META: Record<TrendDir, { label: string; dot: string; text: string; bar
   lateral: { label: "LATERAL", dot: "bg-mist-500", text: "text-mist-400", bar: "#5f7396", arrow: "—" },
 };
 
-export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedAt = 0, market = "perp" }: Props) {
+export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedAt = 0, market = "perp", error = false }: Props) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
@@ -90,8 +91,8 @@ export default function ConfluenceStrip({ confluence, symbol, activeTf, updatedA
         </div>
 
         {!confluence && (
-          <span className="font-mono text-[9.5px] uppercase tracking-widest text-mist-600">
-            cargando tendencias…
+          <span className={`font-mono text-[9.5px] uppercase tracking-widest ${error ? "text-flare-300" : "text-mist-600"}`}>
+            {error ? "tendencias no disponibles · reintentando" : "cargando tendencias…"}
           </span>
         )}
 
