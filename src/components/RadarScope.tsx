@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import type { LiqCluster, MarketState } from "../lib/market";
 import { hashStr, RADAR_CLUSTER_LIMIT } from "../lib/market";
 import { fmtPct, fmtPrice, fmtUsd } from "../lib/format";
@@ -7,6 +7,7 @@ interface Props { state: MarketState; }
 
 const S = 320;
 const C = S / 2;
+const SWEEP_S = 4.8; // segundos por vuelta (coincide con la animación radarSweep)
 
 // mismo mapa que deriveClusters: cada anillo del radar ES una zona de apalancamiento
 const BANDS: { lev: string; frac: number }[] = [
@@ -18,51 +19,56 @@ const BANDS: { lev: string; frac: number }[] = [
 ];
 const radiusFor = (frac: number) => 24 + Math.min(0.55, frac) * 245;
 
-export default function RadarScope({ state }: Props) {
-  const [hovered, setHovered] = useState<{ cl: LiqCluster; x: number; y: number } | null>(null);
-  const [sweep, setSweep] = useState(0);
+interface Hover {
+  cl: LiqCluster;
+  x: number;
+  y: number;
+  band: string;
+  col: string;
+}
 
-  // Barrido guiado por rAF: el MISMO ángulo rota el haz e ilumina los blips,
-  // así que el encendido de cada clúster queda sincronizado con el haz (como
-  // un radar real, no un pulso decorativo desincronizado).
-  useEffect(() => {
-    let raf = 0;
-    let last = 0;
-    const PERIOD = 4800; // ms por vuelta (coincide con la duración anterior)
-    const loop = (t: number) => {
-      if (t - last >= 33) { // ~30 fps, suficiente para un barrido suave
-        last = t;
-        setSweep(((t % PERIOD) / PERIOD) * 360);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  // el haz apunta a las 12 en reposo (−90°) y gira en sentido horario
-  const beamAngle = (-90 + sweep + 360) % 360;
+export default function RadarScope({ state }: Props) {
+  const [hovered, setHovered] = useState<Hover | null>(null);
 
   const cur = state.candles[state.candles.length - 1].c;
   // protegido contra rango plano (evita posiciones NaN en los blips)
   const span = state.pMax - state.pMin || 1;
 
-  const blips = state.clusters.slice(0, RADAR_CLUSTER_LIMIT).map((cl, i) => {
-    const frac = Math.abs(cl.price - cur) / span;
-    const r = radiusFor(frac);
-    const jitter = (hashStr(cl.id) % 100) / 100;
-    // shorts arriba, longs abajo
-    const angle =
-      cl.side === "short"
-        ? (-150 + jitter * 120) * (Math.PI / 180)
-        : (30 + jitter * 120) * (Math.PI / 180);
-    return {
-      cl,
-      x: C + Math.cos(angle) * r,
-      y: C + Math.sin(angle) * r,
-      size: Math.min(8.5, 3 + Math.sqrt(cl.sizeUsd / 1e6) * 1.5),
-      delay: (i * 0.6) % 4.8,
-    };
-  });
+  const blips = useMemo(
+    () =>
+      state.clusters.slice(0, RADAR_CLUSTER_LIMIT).map((cl) => {
+        const frac = Math.abs(cl.price - cur) / span;
+        const r = radiusFor(frac);
+        const jitter = (hashStr(cl.id) % 100) / 100;
+        // shorts arriba, longs abajo
+        const angleDeg = cl.side === "short" ? -150 + jitter * 120 : 30 + jitter * 120;
+        const angle = (angleDeg * Math.PI) / 180;
+        // retardo sincronizado con el haz: el haz arranca arriba (−90°) y gira
+        // en sentido horario (ángulos crecientes en pantalla). El blip se
+        // enciende justo cuando el haz pasa sobre él — como un radar real.
+        const delay = ((((angleDeg + 90) % 360) + 360) % 360) / 360 * SWEEP_S;
+        // banda de apalancamiento más cercana (para resaltar el anillo al hover)
+        let band = BANDS[0].lev;
+        let best = Infinity;
+        for (const b of BANDS) {
+          const d = Math.abs(radiusFor(b.frac) - r);
+          if (d < best) {
+            best = d;
+            band = b.lev;
+          }
+        }
+        return {
+          cl,
+          x: C + Math.cos(angle) * r,
+          y: C + Math.sin(angle) * r,
+          size: Math.min(8.5, 3 + Math.sqrt(cl.sizeUsd / 1e6) * 1.5),
+          delay,
+          band,
+          col: cl.side === "long" ? "#2de0c0" : "#ff5d7e",
+        };
+      }),
+    [state.clusters, cur, span]
+  );
 
   const longBelow = state.clusters.filter((c) => c.side === "long");
   const shortAbove = state.clusters.filter((c) => c.side === "short");
@@ -78,10 +84,11 @@ export default function RadarScope({ state }: Props) {
           </p>
         </div>
         <span className="ml-auto flex items-center gap-1.5 border border-long-500/40 bg-long-900/30 px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-widest text-long-300">
-          <svg width="10" height="10" viewBox="0 0 10 10" className="animate-spin" style={{ animationDuration: "4.8s" }}>
+          <svg width="10" height="10" viewBox="0 0 10 10" className="animate-spin" style={{ animationDuration: `${SWEEP_S}s` }}>
             <path d="M5 5 L5 0 A5 5 0 0 1 9.3 2.5 Z" fill="currentColor" />
           </svg>
           barriendo
+          <b className="tick-num text-mist-200">{blips.length}</b>
         </span>
       </header>
 
@@ -101,15 +108,25 @@ export default function RadarScope({ state }: Props) {
             {/* anillos = zonas de apalancamiento (misma escala que los blips) */}
             {BANDS.map((b) => {
               const r = radiusFor(b.frac);
+              const lit = hovered?.band === b.lev;
               return (
                 <g key={b.lev}>
-                  <circle cx={C} cy={C} r={r} fill="none" stroke="#1a2740" strokeWidth="1" strokeDasharray="2 5" />
+                  <circle
+                    cx={C} cy={C} r={r} fill="none"
+                    stroke={lit ? (hovered ? hovered.col : "#2de0c0") : "#1a2740"}
+                    strokeWidth={lit ? 1.6 : 1}
+                    strokeDasharray="2 5"
+                    opacity={lit ? 0.9 : 1}
+                    style={{ transition: "stroke 0.25s, stroke-width 0.25s, opacity 0.25s" }}
+                  />
                   <text
                     x={C + 5}
                     y={C - r + 11}
-                    fill="#48597a"
+                    fill={lit ? (hovered ? hovered.col : "#7df0da") : "#48597a"}
                     fontSize="8.5"
                     fontFamily="IBM Plex Mono, monospace"
+                    fontWeight={lit ? 700 : 400}
+                    style={{ transition: "fill 0.25s" }}
                   >
                     {b.lev}
                   </text>
@@ -140,41 +157,81 @@ export default function RadarScope({ state }: Props) {
             </text>
 
             {/* barrido */}
-            <g style={{ transformOrigin: `${C}px ${C}px`, animation: "radarSweep 4.8s linear infinite" }}>
+            <g style={{ transformOrigin: `${C}px ${C}px`, animation: `radarSweep ${SWEEP_S}s linear infinite` }}>
               <path d={`M ${C} ${C} L ${C} ${C - 150} A 150 150 0 0 1 ${C + 99} ${C - 113} Z`} fill="rgba(45,224,192,0.05)" />
               <path d={`M ${C} ${C} L ${C} ${C - 150} A 150 150 0 0 1 ${C + 62} ${C - 137} Z`} fill="rgba(45,224,192,0.10)" />
               <path d={`M ${C} ${C} L ${C} ${C - 150} A 150 150 0 0 1 ${C + 27} ${C - 147.5} Z`} fill="rgba(45,224,192,0.20)" />
               <line x1={C} y1={C} x2={C} y2={C - 150} stroke="#7df0da" strokeWidth="1.8" />
             </g>
 
+            {/* bloqueo de objetivo: línea centro → blip al pasar el cursor */}
+            {hovered && (
+              <line
+                x1={C} y1={C} x2={hovered.x} y2={hovered.y}
+                stroke={hovered.col} strokeWidth="1" strokeDasharray="4 3" opacity="0.55"
+              />
+            )}
+
             {/* blips */}
             {blips.map((b) => {
-              const col = b.cl.side === "long" ? "#2de0c0" : "#ff5d7e";
               const isHov = hovered?.cl.id === b.cl.id;
               return (
                 <g
                   key={b.cl.id}
-                  onMouseEnter={() => setHovered({ cl: b.cl, x: b.x, y: b.y })}
+                  onMouseEnter={() => setHovered({ cl: b.cl, x: b.x, y: b.y, band: b.band, col: b.col })}
                   style={{ cursor: "pointer" }}
                 >
                   <circle cx={b.x} cy={b.y} r={b.size + 10} fill="transparent" />
+                  {/* eco de radar: se expande justo cuando el haz pasa sobre el blip */}
                   <circle
-                    cx={b.x} cy={b.y} r={b.size + 3}
-                    fill="none" stroke={col} strokeWidth="1"
+                    cx={b.x} cy={b.y} r={b.size}
+                    fill="none" stroke={b.col}
+                    strokeWidth={0.8 + b.size * 0.12}
                     style={{
                       transformOrigin: `${b.x}px ${b.y}px`,
-                      animation: `blipPulse 2.4s ease-in-out ${b.delay}s infinite`,
+                      animation: `pingSlow ${SWEEP_S}s linear ${b.delay}s infinite`,
                     }}
                   />
-                  <circle cx={b.x} cy={b.y} r={b.size} fill={col} opacity={isHov ? 1 : 0.8} stroke="#070c16" strokeWidth="1" />
-                  {isHov && <circle cx={b.x} cy={b.y} r={b.size + 7} fill="none" stroke={col} strokeWidth="1" strokeDasharray="3 3" />}
+                  <circle
+                    cx={b.x} cy={b.y} r={b.size}
+                    fill={b.col}
+                    stroke="#070c16" strokeWidth="1"
+                    opacity={isHov ? 1 : 0.85}
+                    style={{
+                      transformOrigin: `${b.x}px ${b.y}px`,
+                      transform: isHov ? "scale(1.35)" : "scale(1)",
+                      transition: "transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s",
+                      filter: isHov ? `drop-shadow(0 0 6px ${b.col})` : "none",
+                    }}
+                  />
+                  {isHov && (
+                    <circle cx={b.x} cy={b.y} r={b.size + 7} fill="none" stroke={b.col} strokeWidth="1" strokeDasharray="3 3" />
+                  )}
                 </g>
               );
             })}
 
-            {/* centro */}
+            {/* centro: precio spot actual */}
             <circle cx={C} cy={C} r="5" fill="#dbe6f7" />
             <circle cx={C} cy={C} r="9" fill="none" stroke="rgba(219,230,247,0.4)" strokeWidth="1" />
+            <text
+              x={C} y={C + 20}
+              textAnchor="middle" fill="#8fa3c4" fontSize="7.5"
+              fontFamily="IBM Plex Mono, monospace" letterSpacing="1"
+            >
+              SPOT {fmtPrice(cur, state.meta.decimals)}
+            </text>
+
+            {/* estado vacío */}
+            {blips.length === 0 && (
+              <text
+                x={C} y={C + 44}
+                textAnchor="middle" fill="#48597a" fontSize="9"
+                fontFamily="IBM Plex Mono, monospace" letterSpacing="2"
+              >
+                ESCANEANDO LIQUIDEZ…
+              </text>
+            )}
           </svg>
 
           {/* tooltip del blip */}
@@ -184,9 +241,10 @@ export default function RadarScope({ state }: Props) {
               style={{
                 left: `${(hovered.x / S) * 100}%`,
                 top: `calc(${(hovered.y / S) * 100}% + 26px)`,
+                borderColor: `${hovered.col}66`,
               }}
             >
-              <div className={`font-semibold ${hovered.cl.side === "long" ? "text-long-300" : "text-short-300"}`}>
+              <div className="font-semibold" style={{ color: hovered.col }}>
                 {hovered.cl.side === "long" ? "LIQ. LONGS" : "LIQ. SHORTS"} · {hovered.cl.leverage}
               </div>
               <div className="tick-num mt-0.5 text-mist-200">
@@ -201,17 +259,17 @@ export default function RadarScope({ state }: Props) {
       </div>
 
       <footer className="grid grid-cols-3 divide-x divide-ink-700/50 border-t border-ink-700/50 bg-ink-900/50">
-        <div className="px-3 py-2.5 text-center">
+        <div className="px-3 py-2.5 text-center transition-colors duration-200 hover:bg-ink-800/60">
           <div className="font-mono text-[9px] uppercase tracking-widest text-mist-600">Longs ↓</div>
           <div className="tick-num mt-0.5 font-display text-sm font-bold text-long-300">
             {longBelow.length} · {fmtUsd(longBelow.reduce((s, c) => s + c.sizeUsd, 0))}
           </div>
         </div>
-        <div className="px-3 py-2.5 text-center">
+        <div className="px-3 py-2.5 text-center transition-colors duration-200 hover:bg-ink-800/60">
           <div className="font-mono text-[9px] uppercase tracking-widest text-mist-600">En rango</div>
           <div className="tick-num mt-0.5 font-display text-sm font-bold text-flare-300">{fmtUsd(totalInRange)}</div>
         </div>
-        <div className="px-3 py-2.5 text-center">
+        <div className="px-3 py-2.5 text-center transition-colors duration-200 hover:bg-ink-800/60">
           <div className="font-mono text-[9px] uppercase tracking-widest text-mist-600">Shorts ↑</div>
           <div className="tick-num mt-0.5 font-display text-sm font-bold text-short-300">
             {shortAbove.length} · {fmtUsd(shortAbove.reduce((s, c) => s + c.sizeUsd, 0))}
