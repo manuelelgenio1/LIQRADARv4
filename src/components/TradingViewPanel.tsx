@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Props {
   base: string;
@@ -367,7 +368,9 @@ export default function TradingViewPanel({ base, tfKey, market = "perp" }: Props
         </footer>
       </section>
 
-      {fullscreen && (
+      {/* Portal a <body>: escapa de cualquier ancestro con transform/filter que
+          rompería `position: fixed` (mismo patrón que el Heatmap). */}
+      {fullscreen && createPortal(
         <div className="fixed inset-0 z-50 flex flex-col bg-ink-950">
           <div className="flex h-12 shrink-0 items-center gap-3 border-b border-ink-700/60 bg-ink-900/90 px-4">
             <span className="flex items-center gap-2 font-display text-xs font-bold uppercase tracking-[0.18em] text-mist-100">
@@ -390,7 +393,8 @@ export default function TradingViewPanel({ base, tfKey, market = "perp" }: Props
           <div className="relative min-h-0 flex-1">
             {chartArea(true)}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
