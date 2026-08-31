@@ -138,10 +138,16 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
         {/* ---- veredicto ---- */}
         <div className="flex items-center gap-3 lg:w-[250px] lg:shrink-0">
           <div
-            className="flex h-11 w-11 shrink-0 items-center justify-center border"
+            className="flex h-11 w-11 shrink-0 items-center justify-center border transition-all duration-700"
             style={{
               borderColor: dir === "alcista" ? "#2de0c066" : dir === "bajista" ? "#ff5d7e66" : "#253650",
               background: dir === "alcista" ? "#2de0c012" : dir === "bajista" ? "#ff5d7e12" : "transparent",
+              boxShadow:
+                dir === "lateral"
+                  ? "none"
+                  : `0 0 ${8 + conviction * 16}px ${
+                      dir === "alcista" ? "rgba(45,224,192," : "rgba(255,93,126,"
+                    }${(0.12 + conviction * 0.3).toFixed(2)})`,
             }}
           >
             {dir === "lateral" ? (
@@ -149,7 +155,12 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
                 <path d="M4 12 H20" />
               </svg>
             ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill={dir === "alcista" ? "#2de0c0" : "#ff5d7e"}>
+              <svg
+                key={dir}
+                width="20" height="20" viewBox="0 0 24 24"
+                fill={dir === "alcista" ? "#2de0c0" : "#ff5d7e"}
+                style={{ animation: "feedIn 0.45s cubic-bezier(0.22,1,0.36,1) both" }}
+              >
                 {dir === "alcista" ? <path d="M12 3 L22 20 H2 Z" /> : <path d="M12 21 L2 4 H22 Z" />}
               </svg>
             )}
@@ -172,7 +183,11 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
                 {market}
               </span>
             </div>
-            <div className={`mt-1 font-display text-lg font-bold uppercase tracking-wide ${dirMeta.text}`}>
+            <div
+              key={dir}
+              className={`mt-1 font-display text-lg font-bold uppercase tracking-wide ${dirMeta.text}`}
+              style={{ animation: "feedIn 0.4s cubic-bezier(0.22,1,0.36,1) both" }}
+            >
               {dirMeta.label}
             </div>
           </div>
@@ -186,7 +201,14 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
             </span>
             <span className="font-mono text-[9px] text-mist-500">
               convicción{" "}
-              <b className={`tick-num text-[11px] ${conviction > 0.5 ? "text-flare-300" : "text-mist-300"}`}>
+              <b
+                className={`tick-num text-[11px] transition-all duration-700 ${conviction > 0.5 ? "text-flare-300" : "text-mist-300"}`}
+                style={
+                  conviction > 0.5
+                    ? { textShadow: `0 0 ${6 + conviction * 10}px rgba(255,178,36,0.65)` }
+                    : undefined
+                }
+              >
                 {(conviction * 100).toFixed(0)}%
               </b>
             </span>
@@ -205,7 +227,13 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
               style={{
                 left: `${needleLeft}%`,
                 background: "#eef4fd",
-                boxShadow: "0 0 8px rgba(238,244,253,0.9)",
+                boxShadow: `0 0 ${6 + conviction * 14}px ${
+                  dir === "bajista"
+                    ? "rgba(255,93,126,0.85)"
+                    : dir === "alcista"
+                      ? "rgba(45,224,192,0.85)"
+                      : "rgba(238,244,253,0.7)"
+                }`,
               }}
             />
           </div>
@@ -218,14 +246,19 @@ export default function RadarSignalPanel({ state, ind, confluence, market = "per
 
         {/* ---- contribuciones ---- */}
         <div className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-1.5 sm:grid-cols-3 lg:w-[330px] lg:grid-cols-1">
-          {parts.map((p) => (
-            <div key={p.label} className="flex items-center gap-2" title={p.note}>
-              <span className="w-[108px] shrink-0 truncate font-mono text-[8px] uppercase tracking-wider text-mist-500">
+          {parts.map((p, i) => (
+            <div
+              key={p.label}
+              title={p.note}
+              className="group flex items-center gap-2 border border-transparent px-1 py-0.5 transition-all duration-200 hover:border-ink-600 hover:bg-ink-800/70"
+              style={{ animation: `feedIn 0.4s cubic-bezier(0.22,1,0.36,1) ${Math.min(i * 60, 300)}ms both` }}
+            >
+              <span className="w-[108px] shrink-0 truncate font-mono text-[8px] uppercase tracking-wider text-mist-500 transition-colors duration-200 group-hover:text-mist-300">
                 {p.label}
               </span>
               <DivergingBar v={p.value} color={p.color} />
               <span
-                className={`tick-num w-[34px] shrink-0 text-right font-mono text-[8.5px] font-semibold ${
+                className={`tick-num w-[34px] shrink-0 text-right font-mono text-[8.5px] font-semibold transition-transform duration-200 group-hover:scale-110 ${
                   p.value > 0 ? "text-long-300" : p.value < 0 ? "text-short-300" : "text-mist-500"
                 }`}
               >
