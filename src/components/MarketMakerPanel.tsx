@@ -69,7 +69,7 @@ export default function MarketMakerPanel({ state, ind, cfg, confluence, market =
     layout.set(r.id, pos);
     prev = pos;
   }
-  let overflow = prev > 96;
+  const overflow = prev > 96;
   if (overflow) {
     const n = rungs.length;
     rungs.forEach((r, i) => layout.set(r.id, 4 + (i * 92) / Math.max(1, n - 1)));
