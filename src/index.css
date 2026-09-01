@@ -1,1 +1,168 @@
 @import "tailwindcss";
+
+@theme {
+  --font-display: "Chakra Petch", "IBM Plex Sans", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-ink-950: #04070d;
+  --color-ink-900: #070c16;
+  --color-ink-850: #0a1120;
+  --color-ink-800: #0e1729;
+  --color-ink-750: #131e33;
+  --color-ink-700: #1a2740;
+  --color-ink-600: #253650;
+
+  --color-mist-600: #48597a;
+  --color-mist-500: #5f7396;
+  --color-mist-400: #8fa3c4;
+  --color-mist-300: #b7c7e2;
+  --color-mist-200: #dbe6f7;
+  --color-mist-100: #eef4fd;
+
+  --color-long-300: #7df0da;
+  --color-long-400: #2de0c0;
+  --color-long-500: #14c4a6;
+  --color-long-900: #07332c;
+
+  --color-short-300: #ff93a9;
+  --color-short-400: #ff5d7e;
+  --color-short-500: #f03e63;
+  --color-short-900: #3d0f1c;
+
+  --color-flare-300: #ffd37a;
+  --color-flare-400: #ffb224;
+  --color-flare-500: #f59e0b;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-ink-950);
+  color: var(--color-mist-200);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(45, 224, 192, 0.075), transparent 62%),
+    radial-gradient(900px 560px at 96% 12%, rgba(255, 93, 126, 0.06), transparent 60%),
+    radial-gradient(1000px 700px at 50% 118%, rgba(255, 178, 36, 0.045), transparent 60%),
+    linear-gradient(180deg, #060b14 0%, #04070d 55%, #05080f 100%);
+}
+.ambient::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(143, 163, 196, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(143, 163, 196, 0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(900px 600px at 50% 8%, #000 0%, transparent 78%);
+}
+
+@keyframes tickerMarquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@keyframes radarSweep {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes blipPulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.55); }
+}
+@keyframes panelReveal {
+  from { opacity: 0; transform: translateY(16px) scale(0.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(28px) scale(0.96); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes liveBlink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(45, 224, 192, 0.55); }
+  70% { opacity: 0.55; box-shadow: 0 0 0 6px rgba(45, 224, 192, 0); }
+}
+@keyframes feedIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes dashFlow {
+  to { stroke-dashoffset: -24; }
+}
+@keyframes bellSwing {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(14deg); }
+  40% { transform: rotate(-11deg); }
+  60% { transform: rotate(7deg); }
+  80% { transform: rotate(-4deg); }
+}
+@keyframes pingSlow {
+  0% { transform: scale(1); opacity: 0.6; }
+  80%, 100% { transform: scale(2.4); opacity: 0; }
+}
+
+.anim-reveal {
+  animation: panelReveal 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.anim-feed-in {
+  animation: feedIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.anim-toast {
+  animation: toastIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ticker-track {
+  animation: tickerMarquee 46s linear infinite;
+}
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+.scroll-slim::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-slim::-webkit-scrollbar-track { background: transparent; }
+.scroll-slim::-webkit-scrollbar-thumb { background: #1a2740; border-radius: 99px; }
+.scroll-slim::-webkit-scrollbar-thumb:hover { background: #253650; }
+.scroll-slim { scrollbar-width: thin; scrollbar-color: #1a2740 transparent; }
+
+.panel {
+  position: relative;
+  border: 1px solid rgba(37, 54, 80, 0.55);
+  background: linear-gradient(180deg, rgba(14, 23, 41, 0.88), rgba(10, 17, 32, 0.94));
+  box-shadow: 0 1px 0 rgba(219, 230, 247, 0.03) inset, 0 14px 40px -18px rgba(0, 0, 0, 0.65);
+}
+.panel-corner::before,
+.panel-corner::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+.panel-corner::before {
+  top: -1px; left: -1px;
+  border-top: 2px solid rgba(45, 224, 192, 0.55);
+  border-left: 2px solid rgba(45, 224, 192, 0.55);
+}
+.panel-corner::after {
+  bottom: -1px; right: -1px;
+  border-bottom: 2px solid rgba(45, 224, 192, 0.55);
+  border-right: 2px solid rgba(45, 224, 192, 0.55);
+}
+
+.tick-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-glow-long { text-shadow: 0 0 18px rgba(45, 224, 192, 0.45); }
+.text-glow-short { text-shadow: 0 0 18px rgba(255, 93, 126, 0.45); }
