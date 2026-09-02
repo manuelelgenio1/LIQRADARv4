@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="LIQRADAR v2.1 — Radar de liquidez y liquidaciones cripto en tiempo real: heatmap de liquidaciones, clusters, order flow y consenso de tendencia." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%232de0c0' stroke-width='2'/%3E%3Cpath d='M16 16 L16 4 A12 12 0 0 1 26.4 10 Z' fill='%232de0c0' opacity='0.4'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%232de0c0'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <title>LIQRADAR v2.1 · Radar de Liquidez y Liquidaciones</title>
+  </head>
+  <body>
+    <div id="root">
+      <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#04070d;font-family:'IBM Plex Mono',monospace;">
+        <svg width="72" height="72" viewBox="0 0 34 34" fill="none" style="animation:bootSpin 1.4s linear infinite;">
+          <circle cx="17" cy="17" r="14" stroke="#2de0c0" stroke-width="1.4" opacity="0.5"/>
+          <circle cx="17" cy="17" r="8" stroke="#2de0c0" stroke-width="1" opacity="0.25"/>
+          <path d="M17 17 L17 3 A14 14 0 0 1 29.1 10 Z" fill="#2de0c0" opacity="0.35"/>
+          <circle cx="17" cy="17" r="2" fill="#7df0da"/>
+        </svg>
+        <div style="color:#7df0da;letter-spacing:0.35em;text-transform:uppercase;font-size:15px;font-weight:600;">LIQRADAR</div>
+        <div style="color:#5f7396;letter-spacing:0.2em;text-transform:uppercase;font-size:10px;">conectando con el mercado…</div>
+      </div>
+      <style>@keyframes bootSpin{from{transform:rotate(0)}to{transform:rotate(360deg)}}</style>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
