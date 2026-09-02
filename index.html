@@ -14,7 +14,19 @@
     <title>LIQRADAR v2.1 · Radar de Liquidez y Liquidaciones</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:#04070d;font-family:'IBM Plex Mono',monospace;">
+        <svg width="72" height="72" viewBox="0 0 34 34" fill="none" style="animation:bootSpin 1.4s linear infinite;">
+          <circle cx="17" cy="17" r="14" stroke="#2de0c0" stroke-width="1.4" opacity="0.5"/>
+          <circle cx="17" cy="17" r="8" stroke="#2de0c0" stroke-width="1" opacity="0.25"/>
+          <path d="M17 17 L17 3 A14 14 0 0 1 29.1 10 Z" fill="#2de0c0" opacity="0.35"/>
+          <circle cx="17" cy="17" r="2" fill="#7df0da"/>
+        </svg>
+        <div style="color:#7df0da;letter-spacing:0.35em;text-transform:uppercase;font-size:15px;font-weight:600;">LIQRADAR</div>
+        <div style="color:#5f7396;letter-spacing:0.2em;text-transform:uppercase;font-size:10px;">conectando con el mercado…</div>
+      </div>
+      <style>@keyframes bootSpin{from{transform:rotate(0)}to{transform:rotate(360deg)}}</style>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
